@@ -24,6 +24,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from arch import resolve
+from sources import resolve_sources
 
 PROMPTS = [
     {"text": "The capital of Japan is the city of", "gold": " Tokyo", "story": "fact"},
@@ -66,8 +67,12 @@ def lens_all(model, input_ids):
     finally:
         for h in hooks:
             h.remove()
-    hs = torch.stack([out.hidden_states[0], *captured], dim=0)[:, 0]  # [L+1, T, H]
-    logits = handles.lm_head(handles.final_norm(hs))  # [L+1, T, V]
+    # under device_map sharding the per-layer outputs live on different devices; normalize to
+    # the embedding's device for the stack, then to the lens head's device (no-ops otherwise)
+    dev = out.hidden_states[0].device
+    hs = torch.stack([out.hidden_states[0], *[c.to(dev) for c in captured]], dim=0)[:, 0]  # [L+1, T, H]
+    lens_dev = next(handles.final_norm.parameters(), next(handles.lm_head.parameters())).device
+    logits = handles.lm_head(handles.final_norm(hs.to(lens_dev)))  # [L+1, T, V]
     return torch.log_softmax(logits.float(), dim=-1)
 
 
@@ -78,18 +83,24 @@ def main() -> None:
         "--steps", default="0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
     )
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--final-only", action="store_true", help="single checkpoint (revision main) instead of a step suite"
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    steps = sorted({int(s) for s in args.steps.split(",")})
+    sources = resolve_sources(args.model, args.steps, args.final_only)
+    by_step = {src.step: src for src in sources}
+    steps = sorted(by_step)
     final_step = steps[-1]
-    tok = AutoTokenizer.from_pretrained(args.model)
+    tok = AutoTokenizer.from_pretrained(sources[0].load_ref, revision=sources[0].revision)
 
     prompts = []
     for i, p in enumerate(PROMPTS):
         ids = tok(p["text"])["input_ids"]
-        gold_id = tok(p["gold"])["input_ids"][0]
+        # no special tokens: a BOS-prepending tokenizer (Llama-style) would make gold_id the BOS id
+        gold_id = tok(p["gold"], add_special_tokens=False)["input_ids"][0]
         prompts.append({"id": i, **p, "ids": ids, "gold_id": gold_id})
 
     # Pass 1: final step first to fix per-position targets.
@@ -98,7 +109,8 @@ def main() -> None:
     shards: dict[int, dict] = {i: {"vocab": {}, "steps": {}} for i in range(len(prompts))}
 
     for step in order:
-        model = AutoModelForCausalLM.from_pretrained(args.model, revision=f"step{step}", dtype=torch.float32)
+        src = by_step[step]
+        model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=torch.float32)
         model.eval()
         for p in prompts:
             ids = torch.tensor([p["ids"]])

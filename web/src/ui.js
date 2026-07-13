@@ -47,6 +47,7 @@ export function setBadge(el, mode) {
     precomputed: ['precomputed', ''],
     wasm: ['live · WASM', ''],
     webgpu: ['live · WebGPU', ''],
+    server: ['live · server', ''],
     'precomputed-only': ['precomputed only', 'warn'],
   }
   const [text, cls] = labels[mode] ?? [mode, '']

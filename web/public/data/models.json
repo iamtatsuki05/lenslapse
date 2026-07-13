@@ -1,8 +1,27 @@
 {
   "default": "pythia-70m",
   "models": [
-    { "id": "pythia-14m", "hf": "EleutherAI/pythia-14m", "label": "Pythia 14M" },
-    { "id": "pythia-70m", "hf": "EleutherAI/pythia-70m", "label": "Pythia 70M" },
-    { "id": "pythia-160m", "hf": "EleutherAI/pythia-160m", "label": "Pythia 160M" }
+    {
+      "id": "pythia-14m",
+      "hf": "EleutherAI/pythia-14m",
+      "label": "Pythia 14M"
+    },
+    {
+      "id": "pythia-70m",
+      "hf": "EleutherAI/pythia-70m",
+      "label": "Pythia 70M"
+    },
+    {
+      "id": "pythia-160m",
+      "hf": "EleutherAI/pythia-160m",
+      "label": "Pythia 160M"
+    },
+    {
+      "id": "gpt2",
+      "hf": "gpt2",
+      "label": "GPT-2 124M",
+      "mode": "final",
+      "source": "gpt2"
+    }
   ]
 }

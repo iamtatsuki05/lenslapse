@@ -12,6 +12,9 @@ dependencies = [
     "numpy>=2.0",
 ]
 
+[project.optional-dependencies]
+server = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.0"]
+
 [tool.ruff]
 line-length = 119
 
@@ -19,7 +22,7 @@ line-length = 119
 extend-select = ["I"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["arch", "onnx_f16", "export_checkpoints", "precompute_lens", "check_arch_parity"]
+known-first-party = ["arch", "onnx_f16", "export_checkpoints", "precompute_lens", "check_arch_parity", "sources", "add_model"]
 
 [tool.ruff.format]
 quote-style = "double"

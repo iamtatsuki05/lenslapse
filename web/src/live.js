@@ -5,6 +5,13 @@
 
 import * as ort from 'onnxruntime-web/webgpu'
 import { signUrl } from './auth.js'
+import { getProbe, probeKey, putProbe } from './probeStore.js'
+
+// Optional local probe server (?probe=http://localhost:8017) for models too heavy for the browser.
+const PROBE_URL = new URLSearchParams(location.search).get('probe')
+// ?fresh bypasses saved-probe replay (IndexedDB) and recomputes; the new result overwrites the
+// saved one. Needed after re-exporting a model under the same id, where replay would be stale.
+const FRESH = new URLSearchParams(location.search).has('fresh')
 
 const APP_BASE = import.meta.env.BASE_URL
 // Models-root fallback chain: ?models= URL param > same-origin models/ > HF Hub dataset repo.
@@ -55,6 +62,23 @@ export class LiveEngine {
   }
 
   async init(onStatus) {
+    if (PROBE_URL) {
+      try {
+        const res = await fetch(new URL('/health', PROBE_URL))
+        const health = res.ok ? await res.json() : null
+        if (health?.ok && health.models?.includes(this.modelId)) {
+          this.server = new URL(PROBE_URL).origin
+          this.backend = 'server'
+          this.available = true
+          return true
+        }
+        if (health?.ok) {
+          onStatus?.(`${this.modelId} is not registered on the probe server — falling back to in-browser inference`)
+        }
+      } catch {
+        onStatus?.(`probe server ${PROBE_URL} unreachable — falling back to in-browser inference`)
+      }
+    }
     const resolved = await resolveManifest(this.modelId)
     if (resolved) {
       this.manifest = resolved.manifest
@@ -67,11 +91,17 @@ export class LiveEngine {
     const epOverride = new URLSearchParams(location.search).get('ep')
     this.backend =
       epOverride === 'wasm' ? 'wasm' : 'gpu' in navigator && navigator.gpu ? 'webgpu' : 'wasm'
-    const { AutoTokenizer, env } = await import('@huggingface/transformers')
-    env.allowRemoteModels = false
-    env.allowLocalModels = true
-    env.localModelPath = `${APP_BASE}tokenizer/`
-    this.tokenizer = await AutoTokenizer.from_pretrained(this.hfName)
+    try {
+      const { AutoTokenizer, env } = await import('@huggingface/transformers')
+      env.allowRemoteModels = false
+      env.allowLocalModels = true
+      env.localModelPath = `${APP_BASE}tokenizer/`
+      this.tokenizer = await AutoTokenizer.from_pretrained(this.hfName)
+    } catch (e) {
+      // init must resolve, never reject: callers await it outside their try blocks
+      onStatus?.(`live probing unavailable (tokenizer failed to load: ${e.message}) — precomputed mode only`)
+      return false
+    }
     this.available = true
     return true
   }
@@ -163,6 +193,34 @@ export class LiveEngine {
 
   /** Single forward pass + lens over every (layer, position). Returns grid cells + timing. */
   async probe(text, step, onStatus) {
+    // reproducibility: identical (model, step, prompt) replays the stored result
+    const key = probeKey(this.modelId, step, text)
+    const saved = FRESH ? null : await getProbe(key)
+    if (saved) return { ...saved, replayed: true }
+    const result = this.server ? await this.probeServer(text, step, onStatus) : await this.probeOnnx(text, step, onStatus)
+    await putProbe(key, result)
+    return result
+  }
+
+  async probeServer(text, step, onStatus) {
+    onStatus?.(`probing on ${this.server}…`)
+    const res = await fetch(new URL('/probe', this.server), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.modelId, step, text }),
+    })
+    if (!res.ok) throw new Error(`probe server: ${res.status} ${(await res.text()).slice(0, 120)}`)
+    const r = await res.json()
+    return {
+      tokens: r.tokens,
+      grid: r.grid,
+      timing: { total: r.timing.total, forward: r.timing.forward, probe: r.timing.total },
+      backend: 'server',
+      serverCached: r.cached,
+    }
+  }
+
+  async probeOnnx(text, step, onStatus) {
     const t0 = performance.now()
     const { backbone, lens } = await this.loadCheckpoint(step, onStatus)
     const enc = this.tokenizer(text)

@@ -31,6 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from arch import resolve
 from onnx_f16 import save_f16
+from sources import resolve_sources
 
 PROBE = "The capital of Japan is the city of"
 
@@ -105,9 +106,9 @@ def build_lens_onnx(model: AutoModelForCausalLM, path: Path) -> None:
     onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)]), str(path))
 
 
-def export_step(model_name: str, step: int, out_dir: Path, tok) -> dict:
-    rev = f"step{step}"
-    model = AutoModelForCausalLM.from_pretrained(model_name, revision=rev, dtype=torch.float32)
+def export_source(src, out_dir: Path, tok) -> dict:
+    rev = src.name
+    model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=torch.float32)
     model.eval()
     bb = Backbone(model)
 
@@ -165,7 +166,7 @@ def export_step(model_name: str, step: int, out_dir: Path, tok) -> dict:
     assert top1_match, f"{rev}: f16 top-1 disagrees with torch on the probe — do not ship this checkpoint"
 
     info = {
-        "step": step,
+        "step": src.step,
         "fp32_max_diff": fp32_diff,
         "fp32_top1_match_all_pos": fp32_top1,
         "f16_max_diff": f16_diff,
@@ -192,14 +193,19 @@ def main() -> None:
     )
     ap.add_argument("--out", required=True)
     ap.add_argument("--skip-existing", action="store_true")
+    ap.add_argument(
+        "--final-only", action="store_true", help="single checkpoint (revision main) instead of a step suite"
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    steps = sorted({int(s) for s in args.steps.split(",")})
-    tok = AutoTokenizer.from_pretrained(args.model)
+    sources = resolve_sources(args.model, args.steps, args.final_only)
+    tok = AutoTokenizer.from_pretrained(sources[0].load_ref, revision=sources[0].revision)
 
-    cfg_model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.float32)
+    cfg_model = AutoModelForCausalLM.from_pretrained(
+        sources[0].load_ref, revision=sources[0].revision, dtype=torch.float32
+    )
     meta = {
         "model": args.model,
         "format": "f16",
@@ -225,16 +231,17 @@ def main() -> None:
                 raise SystemExit(
                     f"{out_dir} already holds a manifest for {old.get('model')!r}; refusing to mix models"
                 )
-        except (json.JSONDecodeError, KeyError, TypeError):
-            results = {}
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise SystemExit(f"{manifest_path} is unreadable ({e}); fix or delete it before re-exporting") from e
 
-    for step in steps:
-        step_dir = out_dir / f"step{step}"
+    for src in sources:
+        step = src.step
+        step_dir = out_dir / src.name
         complete = all((step_dir / f).exists() for f in meta["files"])
         if args.skip_existing and complete and step in results:
-            print(f"[step{step}] exists, skipping", flush=True)
+            print(f"[{src.name}] exists, skipping", flush=True)
             continue
-        results[step] = export_step(args.model, step, out_dir, tok)
+        results[step] = export_source(src, out_dir, tok)
         meta["steps"] = [results[k] for k in sorted(results)]
         manifest_path.write_text(json.dumps(meta, indent=1))
 

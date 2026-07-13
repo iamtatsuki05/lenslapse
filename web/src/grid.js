@@ -114,7 +114,7 @@ export class LensGrid {
 }
 
 export function displayToken(tok) {
-  return tok.replace(/^Ġ/, '␣').replace(/^ /, '␣').replace(/\n/g, '⏎').replace(/Ċ/g, '⏎')
+  return tok.replace(/^[Ġ▁ ]/, '␣').replace(/\n/g, '⏎').replace(/Ċ/g, '⏎')
 }
 
 function clip(ctx, text, maxW) {

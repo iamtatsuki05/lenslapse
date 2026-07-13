@@ -54,6 +54,48 @@ python scripts/fidelity_eval.py --out /tmp/fidelity_report.json     # weight-for
 python scripts/check_arch_parity.py --model gpt2                    # lens-identity check on any HF decoder
 ```
 
+## Add your own model (Hub or local)
+
+```bash
+# any HF checkpoint suite (step{N} revisions), a single HF model, or a local HF-Trainer run dir:
+python scripts/add_model.py --model EleutherAI/pythia-31m --id pythia-31m --label "Pythia 31M"     --steps 0,512,8000,143000 --models-root /path/to/models
+python scripts/add_model.py --model gpt2 --id gpt2 --label "GPT-2 124M" --final-only --models-root /path/to/models
+python scripts/add_model.py --model /path/to/trainer_output --id my-run --label "My run" --models-root /path/to/models
+```
+
+One command exports the ONNX pairs (parity-checked), precomputes the lens shards, installs the
+tokenizer, and registers the model in `models.json` — adding a model is a data change, not a code
+change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style RMSNorm verified).
+
+## Heavy models: the local probe server
+
+For models too large to download into a browser, run the optional probe server and point the app
+at it with `?probe=`:
+
+```bash
+pip install -e ".[server]"
+python server/probe_server.py --port 8017 --extra my-big-model=meta-llama/Llama-3.2-1B:final
+# open http://localhost:5199/?probe=http://localhost:8017 — the badge switches to "live · server"
+```
+
+It runs plain `transformers` on CUDA/MPS/CPU (add `--device-map` to shard very large models via
+accelerate). We deliberately did **not** use vLLM/TGI: the logit lens needs the entire per-layer
+residual stream of one teacher-forced forward pass, which generation engines neither expose nor
+accelerate. The server reuses the exact hooked-forward + lens code that builds the precomputed
+shards, so its numbers agree with them by construction (verified 56/56 top-1 on Pythia-70M).
+
+## Reproducibility of probes
+
+Every live probe result is persisted — in the browser (IndexedDB) and on the probe server
+(`server/probe-cache/*.json`, keyed by model ref x revision x prompt). Identical requests replay
+the stored result byte-for-byte, so a shared permalink keeps showing the same numbers across
+sessions, backends, and model-host outages.
+
+The key is the model *reference*, not the weights: if you re-export a model under the same id
+(or retrain a local run in place), saved probes are stale. Open the app with `?fresh` to bypass
+replay and recompute (the new result overwrites the saved one), and clear `server/probe-cache/`
+after retraining.
+
 ## Benchmark
 
 ```bash

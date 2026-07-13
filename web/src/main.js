@@ -129,7 +129,8 @@ function refreshStepUI() {
 function refreshBadgeAndTicks() {
   const eng = engines.get(state.model)
   if (state.mode === 'pre') setBadge($('backend-badge'), eng?.available ? 'precomputed' : 'precomputed-only')
-  buildSliderTicks($('slider-ticks'), state.steps, eng?.liveSteps() ?? [], state.steps.at(-1))
+  const live = eng?.server ? state.steps : (eng?.liveSteps() ?? [])
+  buildSliderTicks($('slider-ticks'), state.steps, live, state.steps.at(-1))
 }
 
 /* ---------- slider (index into steps, ticks positioned on log scale) ---------- */
@@ -158,9 +159,11 @@ function onStepChanged() {
 
 /* ---------- live probing ---------- */
 
+let probeSeq = 0 // only the latest probe run controls the button / error status
 async function runLiveProbe(text) {
   if (!text.trim()) return
   const gen = ++viewGen
+  const run = ++probeSeq
   const engine = getEngine()
   await enginesReady.get(engine.modelId)
   if (gen !== viewGen) return // model/view switched while the engine was initializing
@@ -178,22 +181,27 @@ async function runLiveProbe(text) {
     state.liveResult = { ...res, text, step }
     state.pinned = null
     setBadge($('backend-badge'), res.backend)
+    const where = res.backend === 'server' ? 'on the local probe server' : 'fully in your browser'
+    const note = res.replayed ? ' · replayed from saved probe' : res.serverCached ? ' · from server cache' : ''
     status(
-      `live probe @ step ${step.toLocaleString()} — forward+lens+top-k ${res.timing.probe.toFixed(0)}ms on ${res.backend} (fully in your browser)`
+      `live probe @ step ${step.toLocaleString()} — forward+lens+top-k ${res.timing.probe.toFixed(0)}ms on ${res.backend} (${where})${note}`
     )
     grid.pinned = null
     refreshGrid()
     refreshTrajectory()
     syncHash()
   } catch (e) {
-    status(`live probe failed: ${e.message}`)
+    // a stale probe's late failure must not clobber the status of the view the user is on now
+    if (gen === viewGen) status(`live probe failed: ${e.message}`)
   } finally {
-    $('live-btn').disabled = false
+    if (run === probeSeq) $('live-btn').disabled = false
   }
 }
 
 function nearestLiveStep(step) {
-  const ls = engines.get(state.model)?.liveSteps() ?? []
+  const eng = engines.get(state.model)
+  if (eng?.server) return step // the probe server can load any suite checkpoint
+  const ls = eng?.liveSteps() ?? []
   if (!ls.length) return step
   return ls.reduce((a, b) => (Math.abs(b - step) < Math.abs(a - step) ? b : a))
 }
