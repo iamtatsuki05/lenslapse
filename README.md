@@ -42,10 +42,14 @@ LENSLAPSE_MODELS_DIR=/path/to/converted/models npm run dev   # models dir option
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install torch transformers onnx onnxscript onnxruntime
-# per model id in web/public/data/models.json:
+# per model id in web/public/data/models.json (NOTE: the default --steps list is the 20-step live
+# set; the shipped 14m/70m precomputed data uses a denser 38-step list — pass it explicitly to
+# reproduce, or you will overwrite the shipped shards with a coarser grid):
 python scripts/export_checkpoints.py --model EleutherAI/pythia-70m --out /path/to/models/pythia-70m
-python scripts/precompute_lens.py    --model EleutherAI/pythia-70m --out web/public/data/pythia-70m
-python scripts/fidelity_eval.py --out fidelity_report.json          # weight-format fidelity table
+python scripts/precompute_lens.py    --model EleutherAI/pythia-70m \
+  --steps 0,1,2,4,8,16,32,64,128,256,512,1000,2000,3000,4000,6000,8000,12000,16000,20000,24000,28000,32000,36000,40000,48000,56000,64000,72000,80000,88000,96000,104000,112000,120000,128000,136000,143000 \
+  --out web/public/data/pythia-70m
+python scripts/fidelity_eval.py --out /tmp/fidelity_report.json     # weight-format fidelity table
 python scripts/check_arch_parity.py --model gpt2                    # lens-identity check on any HF decoder
 ```
 
