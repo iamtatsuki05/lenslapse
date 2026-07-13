@@ -1,13 +1,15 @@
 // Precomputed-data store: models.json (catalog), per-model index.json + per-prompt shards,
 // fetched lazily with promise-caching so concurrent callers share one fetch.
 
+import { signUrl } from './auth.js'
+
 const BASE = `${import.meta.env.BASE_URL}data/`
 
 const cache = new Map()
 
 function fetchJson(path) {
   if (!cache.has(path)) {
-    const p = fetch(`${BASE}${path}`).then((res) => {
+    const p = fetch(signUrl(`${BASE}${path}`)).then((res) => {
       if (!res.ok) throw new Error(`${path} missing (${res.status})`)
       return res.json()
     })

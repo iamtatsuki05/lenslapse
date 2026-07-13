@@ -4,6 +4,7 @@
 // One LiveEngine instance per model; the models root hosts one subdirectory per model id.
 
 import * as ort from 'onnxruntime-web/webgpu'
+import { signUrl } from './auth.js'
 
 const APP_BASE = import.meta.env.BASE_URL
 // Models-root fallback chain: ?models= URL param > same-origin models/ > HF Hub dataset repo.
@@ -19,7 +20,7 @@ let sharedRoot // first root that served a manifest wins, shared by all engines
 
 async function fetchManifest(root, modelId) {
   try {
-    const res = await fetch(new URL(`${modelId}/manifest.json`, root))
+    const res = await fetch(signUrl(new URL(`${modelId}/manifest.json`, root).href))
     return res.ok ? await res.json() : null
   } catch {
     return null
@@ -82,6 +83,8 @@ export class LiveEngine {
   async fetchCached(url, onStatus, label) {
     // The Cache API is best-effort: it can be unavailable (private browsing) or full (quota);
     // neither should break the probe — worst case is re-downloading next visit.
+    // Cache entries are keyed on the unsigned URL: the __sign token rotates daily and must not
+    // fragment the cache.
     let cache = null
     try {
       cache = 'caches' in self ? await caches.open(CACHE_NAME) : null
@@ -91,7 +94,7 @@ export class LiveEngine {
       cache = null
     }
     onStatus?.(`downloading ${label}…`)
-    const res = await fetch(url)
+    const res = await fetch(signUrl(url))
     if (!res.ok) throw new Error(`fetch failed: ${url} (${res.status})`)
     const clone = cache ? res.clone() : null
     const buf = await res.arrayBuffer()
