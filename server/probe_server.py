@@ -20,12 +20,18 @@ Usage:
 The registry defaults to the app's models.json (hub suites with step{N} revisions); extend it
 with --extra for local runs or heavy hub models, e.g.:
   --extra my-run=/path/to/trainer_output --extra llama=meta-llama/Llama-3.2-1B:final
+
+Models can also be registered at runtime from the web app's "models" dialog (GET/POST/DELETE
+/models); user-registered entries persist to --registry-file and survive restarts. This is a
+management API for a localhost tool: anyone who can reach the server can register any Hub model
+or any directory readable by the server process, so do not expose the port beyond your machine.
 """
 
 import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -36,6 +42,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from huggingface_hub import model_info
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -45,16 +52,40 @@ from sources import resolve_sources  # noqa: E402
 
 TOPK = 10
 MAX_TOKENS = 64
+DEFAULT_SUITE_STEPS = [
+    0,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1000,
+    2000,
+    4000,
+    8000,
+    16000,
+    32000,
+    64000,
+    128000,
+    143000,
+]
+MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 app = FastAPI(title="LensLapse probe server")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-STATE: dict = {"registry": {}, "cache_dir": None, "max_loaded": 1, "device_map": False}
+STATE: dict = {"registry": {}, "cache_dir": None, "max_loaded": 1, "device_map": False, "registry_file": None}
 LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
 # FastAPI runs sync endpoints in a threadpool; lens_all installs forward hooks on the shared
 # model, so concurrent probes would capture each other's layer outputs (and persist the garbage
 # to the cache). One global lock serializes load+forward+write — fine for a batch-1 local server.
 PROBE_LOCK = threading.Lock()
+REG_LOCK = threading.Lock()  # registry mutations + registry-file writes
 
 
 class ProbeRequest(BaseModel):
@@ -63,7 +94,15 @@ class ProbeRequest(BaseModel):
     text: str
 
 
-def build_registry(models_json: Path | None, extras: list[str]) -> dict:
+class RegisterRequest(BaseModel):
+    id: str
+    ref: str  # HF id or a directory on the server machine
+    mode: str  # "suite" | "final" | "local"
+    label: str | None = None
+    steps: list[int] | None = None  # suite only; defaults to the Pythia step grid
+
+
+def build_registry(models_json: Path | None, registry_file: Path | None, extras: list[str]) -> dict:
     registry: dict = {}
     if models_json and models_json.exists():
         for m in json.loads(models_json.read_text())["models"]:
@@ -72,7 +111,15 @@ def build_registry(models_json: Path | None, extras: list[str]) -> dict:
                 continue  # local paths are machine-specific; register via --extra id=/path
             # "source" is the true HF ref; "hf" doubles as the app's local tokenizer directory
             # name, which for add_model.py onboarded models is the app id, not a Hub id.
-            registry[m["id"]] = {"ref": m.get("source", m["hf"]), "mode": mode}
+            registry[m["id"]] = {
+                "ref": m.get("source", m["hf"]),
+                "mode": mode,
+                "label": m.get("label"),
+                "origin": "catalog",
+            }
+    if registry_file and registry_file.exists():
+        for mid, entry in json.loads(registry_file.read_text()).items():
+            registry[mid] = {**entry, "origin": "user"}
     for e in extras:
         mid, sep, ref = e.partition("=")
         if not sep or not mid or not ref:
@@ -82,8 +129,31 @@ def build_registry(models_json: Path | None, extras: list[str]) -> dict:
             ref, mode = ref[: -len(":final")], "final"
         elif Path(ref).is_dir():
             mode = "local"
-        registry[mid] = {"ref": ref, "mode": mode}
+        registry[mid] = {"ref": ref, "mode": mode, "label": None, "origin": "user"}
     return registry
+
+
+def save_user_registry() -> None:
+    """Persist user-registered entries (dialog/API/--extra) so they survive restarts."""
+    path = STATE["registry_file"]
+    entries = {
+        mid: {k: v for k, v in e.items() if k != "origin"}
+        for mid, e in STATE["registry"].items()
+        if e.get("origin") == "user"
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(entries, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
+def model_steps(entry: dict) -> list[int]:
+    if entry["mode"] == "final":
+        return [0]
+    if entry["mode"] == "local":
+        if not Path(entry["ref"]).is_dir():
+            return []  # directory gone since registration; probing it 404s with an explicit message
+        return [src.step for src in resolve_sources(entry["ref"], "0", final_only=False)]
+    return entry.get("steps") or DEFAULT_SUITE_STEPS
 
 
 def source_for(model_id: str, step: int):
@@ -94,6 +164,9 @@ def source_for(model_id: str, step: int):
     if mode == "final":
         return resolve_sources(ref, "0", final_only=True)[0]
     if mode == "local":
+        if not Path(ref).is_dir():
+            # never fall through to hub-suite resolution for a vanished local path
+            raise HTTPException(404, f"{model_id!r}: local directory {ref} no longer exists")
         for src in resolve_sources(ref, "0", final_only=False):
             if src.step == step:
                 return src
@@ -138,6 +211,90 @@ def load(src):
 @app.get("/health")
 def health():
     return {"ok": True, "models": sorted(STATE["registry"]), "device": pick_device()}
+
+
+@app.get("/models")
+def list_models():
+    return [
+        {
+            "id": mid,
+            "ref": e["ref"],
+            "mode": e["mode"],
+            "label": e.get("label") or mid,
+            "steps": model_steps(e),
+            "origin": e.get("origin", "user"),
+        }
+        for mid, e in sorted(STATE["registry"].items())
+    ]
+
+
+def validate_source(req: RegisterRequest) -> None:
+    """Fail fast with an actionable message before the entry is persisted."""
+    if req.mode == "local":
+        path = Path(req.ref)
+        if not path.is_dir():
+            raise HTTPException(400, f"{req.ref} is not a directory on the server machine")
+        if not (path / "config.json").exists() and not list(path.glob("checkpoint-*")):
+            raise HTTPException(400, f"{req.ref} has neither config.json nor checkpoint-* subdirectories")
+        return
+    try:
+        if req.mode == "suite":
+            steps = req.steps or DEFAULT_SUITE_STEPS
+            model_info(req.ref, revision=f"step{steps[0]}")  # revision convention check, one cheap metadata call
+        else:
+            model_info(req.ref)
+    except Exception as e:
+        raise HTTPException(400, f"cannot resolve {req.ref!r} on the Hugging Face Hub: {e}") from e
+
+
+@app.post("/models", status_code=201)
+def register_model(req: RegisterRequest):
+    if not MODEL_ID_RE.fullmatch(req.id):
+        raise HTTPException(400, "id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+    if req.mode not in ("suite", "final", "local"):
+        raise HTTPException(400, f"unknown mode {req.mode!r} (expected suite, final, or local)")
+    if req.steps is not None and req.mode != "suite":
+        raise HTTPException(400, f"steps only applies to suite mode, not {req.mode!r}")
+    if req.mode == "suite" and req.steps is not None and (not req.steps or any(s < 0 for s in req.steps)):
+        raise HTTPException(400, "steps must be a non-empty list of non-negative ints")
+    if req.mode == "local":
+        # store an absolute path: a CWD-relative one would silently stop resolving after a
+        # restart from another directory (and ~ would never resolve at all)
+        req.ref = str(Path(req.ref).expanduser().resolve())
+    validate_source(req)
+    with REG_LOCK:
+        if req.id in STATE["registry"]:
+            raise HTTPException(409, f"model id {req.id!r} is already registered; remove it first")
+        entry = {"ref": req.ref, "mode": req.mode, "label": req.label, "origin": "user"}
+        if req.mode == "suite" and req.steps:
+            entry["steps"] = sorted(set(req.steps))
+        STATE["registry"][req.id] = entry
+        try:
+            save_user_registry()
+        except OSError as e:
+            del STATE["registry"][req.id]  # keep memory and registry.json consistent
+            raise HTTPException(500, f"could not persist registry: {e}") from e
+    print(f"registered {req.id} -> {req.ref} ({req.mode})", flush=True)
+    return {"id": req.id, **{k: v for k, v in entry.items() if k != "origin"}, "steps": model_steps(entry)}
+
+
+@app.delete("/models/{model_id}")
+def unregister_model(model_id: str):
+    with REG_LOCK:
+        entry = STATE["registry"].get(model_id)
+        if entry is None:
+            raise HTTPException(404, f"unknown model id {model_id!r}")
+        if entry.get("origin") == "catalog":
+            raise HTTPException(400, f"{model_id!r} comes from models.json; edit that file instead")
+        del STATE["registry"][model_id]
+        try:
+            save_user_registry()
+        except OSError as e:
+            STATE["registry"][model_id] = entry  # keep memory and registry.json consistent
+            raise HTTPException(500, f"could not persist registry: {e}") from e
+    # loaded weights (if any) stay resident until the LRU evicts them; only the registry changes
+    print(f"unregistered {model_id}", flush=True)
+    return {"removed": model_id}
 
 
 def read_cache(cache_file: Path) -> dict | None:
@@ -225,6 +382,11 @@ def main() -> None:
         "--models-json", default=str(Path(__file__).resolve().parent.parent / "web/public/data/models.json")
     )
     ap.add_argument("--extra", action="append", default=[], help="id=hf_ref[:final] or id=/local/dir (repeatable)")
+    ap.add_argument(
+        "--registry-file",
+        default=str(Path(__file__).resolve().parent / "registry.json"),
+        help="where models registered via the web dialog / POST /models persist",
+    )
     ap.add_argument("--cache-dir", default=str(Path(__file__).resolve().parent / "probe-cache"))
     ap.add_argument("--max-loaded", type=int, default=1, help="models kept in memory (heavy models: keep 1)")
     ap.add_argument(
@@ -234,11 +396,14 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    STATE["registry"] = build_registry(Path(args.models_json), args.extra)
+    STATE["registry_file"] = Path(args.registry_file)
+    STATE["registry"] = build_registry(Path(args.models_json), STATE["registry_file"], args.extra)
     STATE["cache_dir"] = Path(args.cache_dir)
     STATE["cache_dir"].mkdir(parents=True, exist_ok=True)
     STATE["max_loaded"] = args.max_loaded
     STATE["device_map"] = args.device_map
+    if args.extra:
+        save_user_registry()  # --extra entries persist like dialog-registered ones
     print(f"registry: {sorted(STATE['registry'])}; cache: {STATE['cache_dir']}", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 

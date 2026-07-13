@@ -56,7 +56,14 @@ export class LensGrid {
 
   render() {
     const { canvas, ctx, grid } = this
-    if (!grid) return
+    if (!grid) {
+      // setData(null, ...) must blank the canvas, not leave the previous model's grid visible
+      canvas.width = 0
+      canvas.height = 0
+      canvas.style.width = '0px'
+      canvas.style.height = '0px'
+      return
+    }
     const w = LABEL_W + grid.positions * CELL_W
     const h = HEADER_H + grid.layers * CELL_H
     const dpr = window.devicePixelRatio || 1

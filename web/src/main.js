@@ -1,7 +1,8 @@
 import './style.css'
 import { gridFromShard, loadIndex, loadModels, loadShard, trajectoryFromShard } from './data.js'
 import { LensGrid } from './grid.js'
-import { LiveEngine } from './live.js'
+import { LiveEngine, fetchServerModels } from './live.js'
+import { setupManageModels } from './manage.js'
 import { renderTrajectory } from './traj.js'
 import { buildGallery, buildSliderTicks, hideTooltip, setBadge, showTooltip } from './ui.js'
 import { legendGradient } from './color.js'
@@ -74,7 +75,7 @@ const grid = new LensGrid($('lens-canvas'), {
 })
 
 function gridTokens() {
-  return state.mode === 'live' && state.liveResult ? state.liveResult.tokens : currentPrompt().tokens
+  return state.mode === 'live' && state.liveResult ? state.liveResult.tokens : (currentPrompt()?.tokens ?? [])
 }
 
 async function refreshGrid() {
@@ -168,7 +169,11 @@ async function runLiveProbe(text) {
   await enginesReady.get(engine.modelId)
   if (gen !== viewGen) return // model/view switched while the engine was initializing
   if (!engine.available) {
-    status('live probing unavailable — model host unreachable; showing precomputed prompts only')
+    status(
+      index.prompts.length
+        ? 'live probing unavailable — model host unreachable; showing precomputed prompts only'
+        : 'live probing unavailable — this model needs the probe server, which is unreachable'
+    )
     return
   }
   const step = nearestLiveStep(currentStep())
@@ -212,7 +217,7 @@ function syncHash() {
   const h = new URLSearchParams()
   h.set('m', state.model)
   if (state.mode === 'live' && state.liveText) h.set('q', state.liveText)
-  else h.set('p', String(state.promptId))
+  else if (index.prompts.length) h.set('p', String(state.promptId))
   h.set('s', String(currentStep()))
   if (state.pinned) h.set('pin', `${state.pinned.layer},${state.pinned.pos}`)
   history.replaceState(null, '', `#${h.toString()}`)
@@ -254,7 +259,8 @@ function rebuildPromptSelect() {
     opt.textContent = p.text.replaceAll('\n', '⏎')
     sel.appendChild(opt)
   }
-  sel.value = String(state.promptId)
+  sel.disabled = !index.prompts.length
+  if (index.prompts.length) sel.value = String(state.promptId)
 }
 
 async function switchModel(id) {
@@ -263,7 +269,7 @@ async function switchModel(id) {
   const prev = state.model
   let nextIndex
   try {
-    nextIndex = await loadIndex(id)
+    nextIndex = await modelIndex(id)
   } catch (e) {
     status(`model ${id} unavailable: ${e.message}`)
     $('model-select').value = prev
@@ -273,8 +279,8 @@ async function switchModel(id) {
   state.model = id
   index = nextIndex
   state.steps = index.steps
-  state.mode = 'pre'
-  state.promptId = Math.min(state.promptId, index.prompts.length - 1)
+  state.mode = index.prompts.length ? 'pre' : 'live'
+  state.promptId = Math.max(0, Math.min(state.promptId, index.prompts.length - 1))
   state.stepIdx = Math.min(state.stepIdx, state.steps.length - 1)
   state.pinned = null
   grid.pinned = null
@@ -285,8 +291,60 @@ async function switchModel(id) {
   getEngine(id) // kick off engine init in the background
   refreshBadgeAndTicks()
   syncHash()
+  if (!index.prompts.length) {
+    // server-registered model with no precomputed shards: live-only view
+    grid.setData(null, [], null)
+    status(`${modelInfo(id)?.label ?? id} is live-only — type a prompt below and hit Live probe`)
+    $('live-input').focus()
+  }
   await refreshGrid()
   await refreshTrajectory()
+}
+
+/** index.json for shipped models; a synthetic prompt-less index for server-registered ones. */
+function modelIndex(id) {
+  const entry = modelInfo(id)
+  if (entry?.serverOnly) return Promise.resolve({ steps: entry.steps ?? [0], prompts: [] })
+  return loadIndex(id)
+}
+
+/** Add probe-server registry entries that the static catalog does not ship. */
+function addServerEntries(serverModels) {
+  for (const sm of serverModels ?? []) {
+    // steps can be empty when a registered local directory vanished; such a model cannot be
+    // probed, so keep it out of the picker (it stays visible in the models dialog for removal)
+    if (!sm.steps?.length) continue
+    if (!catalog.models.some((m) => m.id === sm.id)) {
+      catalog.models.push({ id: sm.id, hf: sm.id, label: sm.label, serverOnly: true, steps: sm.steps })
+    }
+  }
+}
+
+function rebuildModelSelect() {
+  const msel = $('model-select')
+  msel.replaceChildren()
+  for (const m of catalog.models) {
+    const opt = document.createElement('option')
+    opt.value = m.id
+    opt.textContent = m.serverOnly ? `${m.label ?? m.id} (server)` : (m.label ?? m.hf)
+    msel.appendChild(opt)
+  }
+  msel.value = state.model
+}
+
+/** Called by the models dialog after every add/remove with the fresh server registry. */
+function mergeServerModels(serverModels) {
+  if (!serverModels) return
+  catalog.models = catalog.models.filter((m) => !m.serverOnly || serverModels.some((s) => s.id === m.id))
+  addServerEntries(serverModels)
+  if (!catalog.models.some((m) => m.id === state.model)) {
+    // the current model was unregistered under us; fall back to the shipped default
+    state.model = catalog.default ?? catalog.models[0].id
+    rebuildModelSelect()
+    switchModel(state.model)
+    return
+  }
+  rebuildModelSelect()
 }
 
 /* ---------- boot ---------- */
@@ -295,26 +353,23 @@ async function boot() {
   status('loading precomputed data…')
   try {
     catalog = await loadModels()
+    addServerEntries(await fetchServerModels()) // server-registered models join the picker
     state.model = catalog.default ?? catalog.models[0].id
     // hash may override the model; read it before loading the index
     const h = new URLSearchParams(location.hash.slice(1))
     if (h.has('m') && catalog.models.some((m) => m.id === h.get('m'))) state.model = h.get('m')
-    index = await loadIndex(state.model)
+    index = await modelIndex(state.model)
   } catch (e) {
     status(`failed to load precomputed data: ${e.message}`)
     return
   }
   state.steps = index.steps
+  if (!index.prompts.length) state.mode = 'live'
 
+  rebuildModelSelect()
   const msel = $('model-select')
-  for (const m of catalog.models) {
-    const opt = document.createElement('option')
-    opt.value = m.id
-    opt.textContent = m.label ?? m.hf
-    msel.appendChild(opt)
-  }
-  msel.value = state.model
   msel.addEventListener('change', () => switchModel(msel.value))
+  setupManageModels(mergeServerModels)
 
   const sel = $('prompt-select')
   sel.addEventListener('change', () => {
@@ -407,7 +462,7 @@ async function boot() {
   try {
     await refreshGrid()
     await refreshTrajectory()
-    status('')
+    status(index.prompts.length ? '' : 'this model is live-only — type a prompt below and hit Live probe')
   } catch (e) {
     status(`failed to render precomputed data: ${e.message}`)
   }

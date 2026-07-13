@@ -24,6 +24,9 @@
         </div>
         <div class="header-status">
           <select id="model-select" class="chip" aria-label="model"></select>
+          <button id="manage-models-btn" class="chip btn" hidden title="Register models on the local probe server">
+            ⚙ models
+          </button>
           <span id="step-readout" class="chip step-chip">step —</span>
           <span id="backend-badge" class="chip badge">precomputed</span>
           <button id="permalink-btn" class="chip btn" title="Copy a permalink to the current view">🔗 permalink</button>
@@ -104,6 +107,48 @@
       </footer>
     </div>
     <div id="tooltip" hidden></div>
+    <dialog id="models-dialog" aria-labelledby="models-dialog-title">
+      <div class="dialog-head">
+        <h3 id="models-dialog-title">Models on the probe server</h3>
+        <button id="models-close" class="btn" aria-label="close">✕</button>
+      </div>
+      <ul id="server-model-list"></ul>
+      <form id="add-model-form">
+        <h4>Add a model</h4>
+        <label>
+          <span>Source (HF id or a directory on the server machine)</span>
+          <input id="am-ref" required placeholder="org/model-name or /path/to/trainer_output" autocomplete="off" />
+        </label>
+        <div class="form-row">
+          <label>
+            <span>App id</span>
+            <input id="am-id" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" autocomplete="off" />
+          </label>
+          <label>
+            <span>Label (optional)</span>
+            <input id="am-label" autocomplete="off" />
+          </label>
+        </div>
+        <fieldset>
+          <legend>Checkpoints</legend>
+          <label><input type="radio" name="am-mode" value="final" checked /> single final checkpoint</label>
+          <label><input type="radio" name="am-mode" value="suite" /> suite (Pythia-style step&#123;N&#125; revisions)</label>
+          <label><input type="radio" name="am-mode" value="local" /> local Trainer directory (checkpoint-*)</label>
+        </fieldset>
+        <label id="am-steps-row" hidden>
+          <span>Steps (comma-separated)</span>
+          <input id="am-steps" autocomplete="off" />
+        </label>
+        <p id="am-error" class="hint error" aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button id="am-submit" type="submit" class="btn primary">Add model</button>
+        </div>
+      </form>
+      <p class="hint">
+        Registered models are probed live through the server (no ONNX export needed) and persist across server
+        restarts.
+      </p>
+    </dialog>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

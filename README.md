@@ -78,6 +78,13 @@ python server/probe_server.py --port 8017 --extra my-big-model=meta-llama/Llama-
 # open http://localhost:5199/?probe=http://localhost:8017 — the badge switches to "live · server"
 ```
 
+When a probe server is connected, a **⚙ models** button appears in the header: register a Hub
+model (single checkpoint or a `step{N}` suite) or a Trainer directory on the server machine from
+the dialog — no ONNX export, no CLI. Registered models show up in the picker as “(server)”,
+are live-only (no precomputed prompts), and persist to `server/registry.json` across restarts.
+The management API (`GET/POST/DELETE /models`) is unauthenticated by design — keep the server
+bound to localhost.
+
 It runs plain `transformers` on CUDA/MPS/CPU (add `--device-map` to shard very large models via
 accelerate). We deliberately did **not** use vLLM/TGI: the logit lens needs the entire per-layer
 residual stream of one teacher-forced forward pass, which generation engines neither expose nor

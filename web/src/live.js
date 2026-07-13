@@ -9,6 +9,26 @@ import { getProbe, probeKey, putProbe } from './probeStore.js'
 
 // Optional local probe server (?probe=http://localhost:8017) for models too heavy for the browser.
 const PROBE_URL = new URLSearchParams(location.search).get('probe')
+
+/** Origin of the configured probe server, or null when the app runs purely static. */
+export function probeServerOrigin() {
+  try {
+    return PROBE_URL ? new URL(PROBE_URL, location.href).origin : null
+  } catch {
+    return null
+  }
+}
+
+/** Server model registry ([{id, ref, mode, label, steps, origin}]) or null if unreachable. */
+export async function fetchServerModels() {
+  if (!probeServerOrigin()) return null
+  try {
+    const res = await fetch(new URL('/models', probeServerOrigin()))
+    return res.ok ? await res.json() : null
+  } catch {
+    return null
+  }
+}
 // ?fresh bypasses saved-probe replay (IndexedDB) and recomputes; the new result overwrites the
 // saved one. Needed after re-exporting a model under the same id, where replay would be stale.
 const FRESH = new URLSearchParams(location.search).has('fresh')
@@ -62,12 +82,13 @@ export class LiveEngine {
   }
 
   async init(onStatus) {
-    if (PROBE_URL) {
+    const serverOrigin = probeServerOrigin()
+    if (serverOrigin) {
       try {
-        const res = await fetch(new URL('/health', PROBE_URL))
+        const res = await fetch(new URL('/health', serverOrigin))
         const health = res.ok ? await res.json() : null
         if (health?.ok && health.models?.includes(this.modelId)) {
-          this.server = new URL(PROBE_URL).origin
+          this.server = serverOrigin
           this.backend = 'server'
           this.available = true
           return true
