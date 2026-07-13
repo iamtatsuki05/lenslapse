@@ -98,14 +98,11 @@ picks it up on reload and runs it **fully in-browser**; for the deployed site, u
 pairs from `server/exported-models/<id>/` to your model host and rebuild.
 
 It runs plain `transformers` on CUDA/MPS/CPU (add `--device-map` to shard very large models via
-accelerate). We deliberately did **not** use vLLM/TGI: the logit lens needs the entire per-layer
-residual stream of one teacher-forced forward pass, which generation engines do not natively
-expose — [NNsight](https://github.com/ndif-team/nnsight) can trace it out of vLLM, but needs
-`enforce_eager` (giving up the CUDA-graph speedups) and CUDA hardware, and a batch-1 single
-forward gains nothing from a serving engine anyway. The server reuses the exact hooked-forward +
+accelerate): the logit lens needs the entire per-layer residual stream of one teacher-forced
+forward pass — a batch-1 workload with no decoding loop, which generation-oriented serving
+engines neither expose natively nor accelerate. The server reuses the exact hooked-forward +
 lens code that builds the precomputed shards, so its numbers agree with them by construction
-(verified 56/56 top-1 on Pythia-70M). An NNsight+vLLM backend for multi-GPU tensor-parallel
-models would slot in behind the same `/probe` API if ever needed.
+(verified 56/56 top-1 on Pythia-70M).
 
 ## Reproducibility of probes
 
