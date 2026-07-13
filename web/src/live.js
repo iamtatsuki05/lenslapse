@@ -7,8 +7,39 @@ import * as ort from 'onnxruntime-web/webgpu'
 import { signUrl } from './auth.js'
 import { getProbe, probeKey, putProbe } from './probeStore.js'
 
-// Optional local probe server (?probe=http://localhost:8017) for models too heavy for the browser.
-const PROBE_URL = new URLSearchParams(location.search).get('probe')
+// Optional local probe server for models too heavy for the browser.
+// ?probe=<url> connects and is remembered (localStorage) so later visits need no parameter;
+// ?probe=off forgets it. A locally-served app additionally auto-detects the default port —
+// a closed local port refuses instantly, so this costs nothing when no server is running.
+// Public (non-localhost) deployments never probe the visitor's machine without explicit opt-in.
+function resolveProbeUrl() {
+  const param = new URLSearchParams(location.search).get('probe')
+  if (param === 'off') {
+    try {
+      localStorage.removeItem('lenslapse-probe')
+    } catch {
+      /* storage unavailable */
+    }
+    return null
+  }
+  if (param) {
+    try {
+      localStorage.setItem('lenslapse-probe', param)
+    } catch {
+      /* storage unavailable — still usable for this visit */
+    }
+    return param
+  }
+  try {
+    const saved = localStorage.getItem('lenslapse-probe')
+    if (saved) return saved
+  } catch {
+    /* storage unavailable */
+  }
+  if (['localhost', '127.0.0.1'].includes(location.hostname)) return 'http://localhost:8017'
+  return null
+}
+const PROBE_URL = resolveProbeUrl()
 
 /** Origin of the configured probe server, or null when the app runs purely static. */
 export function probeServerOrigin() {

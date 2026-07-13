@@ -69,14 +69,19 @@ change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style R
 
 ## Heavy models: the local probe server
 
-For models too large to download into a browser, run the optional probe server and point the app
-at it with `?probe=`:
+For models too large to download into a browser, run the optional probe server:
 
 ```bash
 pip install -e ".[server]"
 python server/probe_server.py --port 8017 --extra my-big-model=meta-llama/Llama-3.2-1B:final
-# open http://localhost:5199/?probe=http://localhost:8017 — the badge switches to "live · server"
+# a locally served app (npm run dev / preview) finds the default port by itself;
+# probe any suite step — the badge switches to "live · server"
 ```
+
+A locally served app auto-detects the server on the default port `8017`. Anywhere else (for
+example the public Pages deployment), opt in once with `?probe=http://localhost:8017` — the app
+remembers the server across visits, so later visits need no parameter; `?probe=off` forgets it.
+On an HTTPS deployment your browser may ask permission to reach the local network the first time.
 
 When a probe server is connected, a **⚙ models** button appears in the header: register a Hub
 model (single checkpoint or a `step{N}` suite) or a Trainer directory on the server machine from
