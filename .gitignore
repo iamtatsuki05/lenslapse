@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+
+# Node / build artifacts (web/ has its own .gitignore too)
+node_modules/
+web/dist/
+
+# local scratch
+*.log
