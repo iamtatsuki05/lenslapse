@@ -1,0 +1,25 @@
+[project]
+name = "lenslapse-scripts"
+version = "0.1.0"
+description = "Checkpoint conversion and precompute pipeline for LensLapse"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.13",
+    "transformers>=4.50",
+    "onnx>=1.17",
+    "onnxscript>=0.1",
+    "onnxruntime>=1.20",
+    "numpy>=2.0",
+]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["arch", "onnx_f16", "export_checkpoints", "precompute_lens", "check_arch_parity"]
+
+[tool.ruff.format]
+quote-style = "double"

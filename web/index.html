@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⧖</text></svg>"
+    />
+    <meta
+      name="description"
+      content="LensLapse: a fully in-browser time-lapse of the logit lens across Pythia training checkpoints."
+    />
+    <title>LensLapse — watch a language model learn, layer by layer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="header">
+        <div class="brand">
+          <span class="logo">⧖</span>
+          <h1>LensLapse</h1>
+          <span class="subtitle">a training-time-lapse for the logit lens</span>
+        </div>
+        <div class="header-status">
+          <select id="model-select" class="chip" aria-label="model"></select>
+          <span id="step-readout" class="chip step-chip">step —</span>
+          <span id="backend-badge" class="chip badge">precomputed</span>
+          <button id="permalink-btn" class="chip btn" title="Copy a permalink to the current view">🔗 permalink</button>
+          <a
+            id="repo-link"
+            class="chip btn"
+            href="https://github.com/iamtatsuki05/lenslapse"
+            target="_blank"
+            rel="noopener"
+            >GitHub</a
+          >
+        </div>
+      </header>
+
+      <section id="control-strip">
+        <div class="slider-wrap">
+          <div class="slider-label">
+            <span>training step</span>
+            <span id="slider-value" class="mono">0</span>
+          </div>
+          <div id="slider-track">
+            <input id="step-slider" type="range" min="0" max="0" step="1" value="0" aria-label="training step" />
+            <div id="slider-ticks"></div>
+          </div>
+          <div class="slider-scale mono"><span>step 0</span><span id="slider-max-label">step 143,000</span></div>
+        </div>
+      </section>
+
+      <main id="main">
+        <section id="grid-panel" class="panel">
+          <div class="panel-head">
+            <h2>Logit-lens grid</h2>
+            <span class="hint">cell = top-1 lens prediction · hover: top-10 · click: pin for trajectory</span>
+          </div>
+          <div id="grid-scroll">
+            <canvas id="lens-canvas"></canvas>
+          </div>
+          <div id="grid-legend" class="legend"></div>
+        </section>
+
+        <aside id="side-panels">
+          <section id="traj-panel" class="panel">
+            <div class="panel-head">
+              <h2>Trajectory across training</h2>
+              <span id="traj-subtitle" class="hint">click a cell in the grid</span>
+            </div>
+            <svg id="traj-svg" role="img" aria-label="token probability across training steps"></svg>
+          </section>
+          <section id="gallery-panel" class="panel">
+            <div class="panel-head"><h2>Emergence stories</h2></div>
+            <div id="gallery-cards"></div>
+          </section>
+        </aside>
+      </main>
+
+      <footer id="prompt-bar">
+        <label class="prompt-select-wrap">
+          <span class="lightning" title="instant: precomputed across all checkpoints">⚡</span>
+          <select id="prompt-select" aria-label="curated prompt"></select>
+        </label>
+        <div class="live-wrap">
+          <input
+            id="live-input"
+            type="text"
+            placeholder="…or type any prompt and probe it live in your browser"
+            aria-label="free-text prompt for live probing"
+          />
+          <button id="live-btn" class="btn primary" title="single forward pass, fully client-side">Live probe</button>
+        </div>
+        <span id="status-line" class="hint" aria-live="polite"></span>
+      </footer>
+    </div>
+    <div id="tooltip" hidden></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
