@@ -1,10 +1,12 @@
 """Optional local probe server for models too heavy for in-browser inference.
 
 Why not vLLM/TGI: the logit lens needs the *entire per-layer residual stream* of one
-teacher-forced forward pass. Generation engines neither expose per-layer hidden states nor
-benefit this workload (no decoding loop, batch size 1), so this server runs plain
-transformers with `device_map="auto"` (CUDA/MPS/CPU), reusing the exact hooked-forward +
-lens implementation that generates the precomputed shards — the numbers agree by construction.
+teacher-forced forward pass. Generation engines do not natively expose per-layer hidden
+states (tracing layers like NNsight can reach them, but require enforce_eager and are
+CUDA-only), and this workload (no decoding loop, batch size 1) gains nothing from a serving
+engine. So this server runs plain transformers on CUDA/MPS/CPU, reusing the exact
+hooked-forward + lens implementation that generates the precomputed shards — the numbers
+agree by construction.
 
 Every probe result is persisted to --cache-dir keyed by (model ref, revision, prompt), and
 identical requests are replayed from disk, byte-for-byte: results are reproducible across
