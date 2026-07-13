@@ -4,6 +4,7 @@
 
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
 - **Three model sizes** (Pythia 14M / 70M / 160M) switchable in the header; the recipe itself is architecture-generic (GPT-NeoX, GPT-2, and Llama-style RMSNorm models all pass the parity check — see `scripts/check_arch_parity.py`).
+- **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3×) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
 - Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
 

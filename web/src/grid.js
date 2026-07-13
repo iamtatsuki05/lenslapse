@@ -65,9 +65,20 @@ export class LensGrid {
     canvas.style.width = `${w}px`
     canvas.style.height = `${h}px`
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-
-    const dark = this.dark.matches
     ctx.clearRect(0, 0, w, h)
+    this.renderTo(ctx, { dark: this.dark.matches })
+  }
+
+  /** Grid pixel size at scale 1 (used by the figure exporter). */
+  size() {
+    if (!this.grid) return { w: 0, h: 0 }
+    return { w: LABEL_W + this.grid.positions * CELL_W, h: HEADER_H + this.grid.layers * CELL_H }
+  }
+
+  /** Draw the grid into an arbitrary 2D context (transform must be set by the caller). */
+  renderTo(ctx, { dark = false } = {}) {
+    const { grid } = this
+    if (!grid) return
     ctx.font = '11px ui-monospace, monospace'
     ctx.textBaseline = 'middle'
 

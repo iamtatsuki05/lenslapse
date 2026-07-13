@@ -371,6 +371,31 @@ async function boot() {
     status('permalink copied to clipboard')
   })
 
+  const exportView = () => ({
+    grid,
+    trajSvg: state.pinned && state.mode === 'pre' ? $('traj-svg') : null,
+    meta: {
+      model: modelInfo()?.label ?? state.model,
+      prompt: state.mode === 'live' ? state.liveText : currentPrompt().text,
+      step: state.mode === 'live' ? (state.liveResult?.step ?? currentStep()) : currentStep(),
+      pinned: state.pinned,
+      permalink: location.href,
+    },
+  })
+  const runExport = async (fn, label) => {
+    $('export-menu').removeAttribute('open')
+    try {
+      status(`exporting ${label}…`)
+      const { exportPng, exportPdf } = await import('./export.js')
+      await (fn === 'png' ? exportPng : exportPdf)(exportView())
+      status(`${label} exported`)
+    } catch (e) {
+      status(`export failed: ${e.message}`)
+    }
+  }
+  $('export-png').addEventListener('click', () => runExport('png', 'PNG figure'))
+  $('export-pdf').addEventListener('click', () => runExport('pdf', 'PDF figure'))
+
   try {
     await refreshGrid()
     await refreshTrajectory()

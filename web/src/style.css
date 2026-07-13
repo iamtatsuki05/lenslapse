@@ -375,6 +375,42 @@ body {
   flex-basis: 100%;
 }
 
+/* ---------- export menu ---------- */
+.export-menu {
+  position: relative;
+}
+
+.export-menu summary {
+  list-style: none;
+  display: inline-block;
+}
+
+.export-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.export-options {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  min-width: 110px;
+}
+
+.export-options .btn {
+  border-radius: 7px;
+  padding: 6px 10px;
+  text-align: left;
+}
+
 /* ---------- tooltip ---------- */
 #tooltip {
   position: fixed;
