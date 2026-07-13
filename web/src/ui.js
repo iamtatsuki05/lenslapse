@@ -58,7 +58,7 @@ const STORY_CARDS = [
   {
     tag: 'fact acquisition',
     title: 'When does the model learn “Tokyo”?',
-    desc: 'Scrub the slider: for “The capital of Japan is the city of”, watch Tokyo surface in the last layers only after thousands of steps — an S-curve you can see.',
+    desc: 'Scrub the slider: for “The capital of Japan is the city of”, watch Tokyo surface in the last layers after thousands of steps — then dip and recover. Acquisition is not monotone.',
     match: (p) => p.text.startsWith('The capital of Japan'),
     pin: 'lastLayerLastPos',
     step: 8000,
