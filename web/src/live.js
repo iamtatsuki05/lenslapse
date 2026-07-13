@@ -23,7 +23,9 @@ export function probeServerOrigin() {
 export async function fetchServerModels() {
   if (!probeServerOrigin()) return null
   try {
-    const res = await fetch(new URL('/models', probeServerOrigin()))
+    // hard timeout: a hanging request (e.g. a private-network preflight that never settles on
+    // an HTTPS page) must degrade to "no server", never stall the caller — boot awaits this
+    const res = await fetch(new URL('/models', probeServerOrigin()), { signal: AbortSignal.timeout(4000) })
     return res.ok ? await res.json() : null
   } catch {
     return null
@@ -85,7 +87,7 @@ export class LiveEngine {
     const serverOrigin = probeServerOrigin()
     if (serverOrigin) {
       try {
-        const res = await fetch(new URL('/health', serverOrigin))
+        const res = await fetch(new URL('/health', serverOrigin), { signal: AbortSignal.timeout(4000) })
         const health = res.ok ? await res.json() : null
         if (health?.ok && health.models?.includes(this.modelId)) {
           this.server = serverOrigin

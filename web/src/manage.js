@@ -71,7 +71,10 @@ export function setupManageModels(onChange) {
         rm.addEventListener('click', async () => {
           rm.disabled = true
           try {
-            const res = await fetch(new URL(`/models/${encodeURIComponent(m.id)}`, origin), { method: 'DELETE' })
+            const res = await fetch(new URL(`/models/${encodeURIComponent(m.id)}`, origin), {
+              method: 'DELETE',
+              signal: AbortSignal.timeout(10000),
+            })
             if (!res.ok) {
               error.textContent = `remove failed: ${await errorDetail(res)}`
               return
@@ -119,6 +122,7 @@ export function setupManageModels(onChange) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30000), // hub-side validation can take a few seconds
       })
       if (!res.ok) {
         error.textContent = await errorDetail(res)

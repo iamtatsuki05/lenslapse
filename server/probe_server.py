@@ -81,6 +81,18 @@ MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 app = FastAPI(title="LensLapse probe server")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+@app.middleware("http")
+async def allow_private_network(request, call_next):
+    # Chrome's Private Network Access: an HTTPS page (e.g. the GitHub Pages deployment) probing
+    # this localhost server sends a preflight with Access-Control-Request-Private-Network; without
+    # this response header the browser refuses (or stalls) the request.
+    response = await call_next(request)
+    if request.method == "OPTIONS" and request.headers.get("access-control-request-private-network") == "true":
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+
 STATE: dict = {"registry": {}, "cache_dir": None, "max_loaded": 1, "device_map": False, "registry_file": None}
 LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
 # FastAPI runs sync endpoints in a threadpool; lens_all installs forward hooks on the shared
