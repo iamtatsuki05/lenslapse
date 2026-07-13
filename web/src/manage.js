@@ -52,7 +52,10 @@ export function setupManageModels(onChange) {
     idInput.dataset.touched = '1'
   })
 
+  let listGen = 0 // bumped per render: poll chains from replaced (detached) rows must stop
+
   async function renderList() {
+    const gen = ++listGen
     const list = $('server-model-list')
     const models = await fetchServerModels()
     list.replaceChildren()
@@ -65,6 +68,7 @@ export function setupManageModels(onChange) {
       const steps = m.mode === 'suite' ? `${m.steps.length} steps` : m.mode === 'local' ? `${m.steps.length} local ckpts` : 'final'
       li.innerHTML = `<span class="mono">${escapeHtml(m.id)}</span> <span class="hint">${escapeHtml(m.ref)} · ${steps}</span>`
       if (m.origin === 'user') {
+        li.appendChild(convertButton(m.id, gen))
         const rm = document.createElement('button')
         rm.className = 'btn'
         rm.textContent = 'remove'
@@ -92,6 +96,70 @@ export function setupManageModels(onChange) {
       }
       list.appendChild(li)
     }
+  }
+
+  /** "convert to ONNX" button + status; resumes progress display if a job is already running. */
+  function convertButton(id, gen) {
+    const wrap = document.createElement('span')
+    wrap.className = 'convert-wrap'
+    const btn = document.createElement('button')
+    btn.className = 'btn'
+    btn.textContent = 'convert to ONNX'
+    const stat = document.createElement('span')
+    stat.className = 'hint'
+    wrap.append(btn, stat)
+
+    const poll = async () => {
+      if (gen !== listGen || !$('models-dialog').open) return // row was re-rendered or dialog closed
+      try {
+        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin), {
+          signal: AbortSignal.timeout(10000),
+        })
+        if (res.status === 404) return // no job — leave the button idle
+        if (!res.ok) {
+          setTimeout(poll, 3000) // transient server error: keep watching a possibly-running job
+          return
+        }
+        const job = await res.json()
+        if (job.status === 'running') {
+          btn.disabled = true
+          stat.textContent = `converting… ${job.log.at(-1) ?? ''}`
+          setTimeout(poll, 3000)
+        } else if (job.status === 'done') {
+          btn.disabled = true
+          stat.textContent = 'converted — rebuild/reload the app to run it in-browser'
+        } else {
+          btn.disabled = false
+          stat.textContent = `conversion failed: ${job.log.at(-1) ?? 'see server log'}`
+        }
+      } catch {
+        stat.textContent = 'probe server unreachable — retrying…'
+        setTimeout(poll, 3000)
+      }
+    }
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      stat.textContent = 'starting…'
+      try {
+        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin), {
+          method: 'POST',
+          signal: AbortSignal.timeout(10000),
+        })
+        if (!res.ok) {
+          stat.textContent = ''
+          error.textContent = `convert failed: ${await errorDetail(res)}`
+          btn.disabled = false
+          return
+        }
+        poll()
+      } catch (err) {
+        stat.textContent = ''
+        error.textContent = `probe server unreachable: ${err.message}`
+        btn.disabled = false
+      }
+    })
+    poll() // pick up a job already in flight (e.g. dialog reopened mid-conversion)
+    return wrap
   }
 
   $('add-model-form').addEventListener('submit', async (e) => {

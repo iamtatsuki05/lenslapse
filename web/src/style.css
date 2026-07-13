@@ -541,3 +541,9 @@ body {
 #add-model-form label[hidden] {
   display: none;
 }
+.convert-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}

@@ -79,6 +79,9 @@ def main() -> None:
     else:
         mode = "suite"
     entry = {"id": args.id, "hf": args.id, "label": args.label, "mode": mode, "source": args.model}
+    if mode == "suite":
+        # record the step grid: consumers with no shard data (e.g. the probe server) need it
+        entry["steps"] = sorted({int(s) for s in args.steps.split(",")})
     catalog["models"] = [m for m in catalog["models"] if m["id"] != args.id] + [entry]
     tmp = models_json.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(catalog, indent=2) + "\n")

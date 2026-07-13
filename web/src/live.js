@@ -76,11 +76,11 @@ const HF_DEFAULT = 'https://huggingface.co/datasets/iamtatsuki05/lenslapse-onnx/
 const CACHE_NAME = 'lenslapse-models-v1'
 const MAX_SESSIONS = 2 // fp32-expanded weights are large (70m ≈ 280MB, 160m ≈ 650MB in memory)
 
-let sharedRoot // first root that served a manifest wins, shared by all engines
-
 async function fetchManifest(root, modelId) {
   try {
-    const res = await fetch(signUrl(new URL(`${modelId}/manifest.json`, root).href))
+    const res = await fetch(signUrl(new URL(`${modelId}/manifest.json`, root).href), {
+      signal: AbortSignal.timeout(8000),
+    })
     return res.ok ? await res.json() : null
   } catch {
     return null
@@ -88,16 +88,14 @@ async function fetchManifest(root, modelId) {
 }
 
 async function resolveManifest(modelId) {
-  const param = new URLSearchParams(location.search).get('models')
-  const candidates = sharedRoot
-    ? [sharedRoot]
-    : [param, `${APP_BASE}models/`, HF_DEFAULT].filter(Boolean).map((b) => new URL(b, location.href).href)
-  for (const root of candidates) {
+  // every model walks the full chain in priority order (explicit param > same-origin > Hub):
+  // a locally converted model lives under the dev middleware while shipped suites live on the
+  // Hub, and a remembered root must never outrank an explicit ?models= override
+  const chain = [new URLSearchParams(location.search).get('models'), `${APP_BASE}models/`, HF_DEFAULT]
+  for (const base of chain.filter(Boolean)) {
+    const root = new URL(base, location.href).href
     const manifest = await fetchManifest(root, modelId)
-    if (manifest) {
-      sharedRoot = root
-      return { manifest, baseUrl: new URL(`${modelId}/`, root).href }
-    }
+    if (manifest) return { manifest, baseUrl: new URL(`${modelId}/`, root).href }
   }
   return null
 }

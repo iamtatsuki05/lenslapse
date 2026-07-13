@@ -34,16 +34,18 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from huggingface_hub import model_info
 from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -100,6 +102,8 @@ LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
 # to the cache). One global lock serializes load+forward+write — fine for a batch-1 local server.
 PROBE_LOCK = threading.Lock()
 REG_LOCK = threading.Lock()  # registry mutations + registry-file writes
+JOBS: dict = {}  # model id -> {"status": "running|done|failed", "log": deque}; conversions run one at a time
+JOBS_LOCK = threading.Lock()  # guards JOBS check-and-set (endpoints run concurrently in the threadpool)
 
 
 class ProbeRequest(BaseModel):
@@ -130,6 +134,7 @@ def build_registry(models_json: Path | None, registry_file: Path | None, extras:
                 "mode": mode,
                 "label": m.get("label"),
                 "origin": "catalog",
+                **({"steps": m["steps"]} if "steps" in m else {}),
             }
     if registry_file and registry_file.exists():
         for mid, entry in json.loads(registry_file.read_text()).items():
@@ -294,6 +299,11 @@ def register_model(req: RegisterRequest):
 
 @app.delete("/models/{model_id}")
 def unregister_model(model_id: str):
+    with JOBS_LOCK:
+        job = JOBS.get(model_id)
+        if job and job["status"] == "running":
+            raise HTTPException(409, f"{model_id!r} is being converted; wait for the job to finish")
+        JOBS.pop(model_id, None)  # a later re-registration must not inherit this id's old job state
     with REG_LOCK:
         entry = STATE["registry"].get(model_id)
         if entry is None:
@@ -309,6 +319,88 @@ def unregister_model(model_id: str):
     # loaded weights (if any) stay resident until the LRU evicts them; only the registry changes
     print(f"unregistered {model_id}", flush=True)
     return {"removed": model_id}
+
+
+@app.post("/models/{model_id}/convert", status_code=202)
+def convert_model(model_id: str):
+    """Run the full ONNX onboarding pipeline (add_model.py) for a registered model, in the
+    background. On success the model graduates into web/public + models.json (browser-runnable
+    after the app is rebuilt or served from source), and its dialog registration is retired."""
+    entry = STATE["registry"].get(model_id)
+    if entry is None:
+        raise HTTPException(404, f"unknown model id {model_id!r}")
+    if entry.get("origin") == "catalog":
+        raise HTTPException(400, f"{model_id!r} is already in models.json (already converted or shipped)")
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    cmd = [
+        sys.executable,
+        str(scripts / "add_model.py"),
+        "--model", entry["ref"],
+        "--id", model_id,
+        f"--label={entry.get('label') or model_id}",  # = form: a label starting with '-' must not read as an option
+        "--models-root", str(STATE["models_root"]),
+        "--force",  # explicit user action: re-converting the same id overwrites its own artifacts
+    ]  # fmt: skip
+    if entry["mode"] == "final":
+        cmd.append("--final-only")
+    elif entry["mode"] == "suite":
+        cmd += ["--steps", ",".join(str(s) for s in model_steps(entry))]
+    with JOBS_LOCK:
+        # check-and-set under one lock: concurrent POSTs must not start two export subprocesses
+        if any(j["status"] == "running" for j in JOBS.values()):
+            raise HTTPException(409, "another conversion is already running; wait for it to finish")
+        job = {"status": "running", "log": deque(maxlen=50)}
+        JOBS[model_id] = job
+    threading.Thread(target=_run_convert, args=(model_id, job, cmd), daemon=True).start()
+    print(f"converting {model_id}: {' '.join(cmd)}", flush=True)
+    return {"id": model_id, "status": "running"}
+
+
+def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
+    proc = None
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+        for line in proc.stdout:
+            job["log"].append(line.rstrip())
+        proc.wait()
+        job["status"] = "done" if proc.returncode == 0 else "failed"
+    except Exception as e:  # noqa: BLE001 — a crashed job must surface as failed, not hang as running
+        job["log"].append(f"conversion crashed: {e}")
+        job["status"] = "failed"
+        if proc is not None:
+            proc.kill()  # never leave an orphan exporter writing to models_root/web/public
+            proc.wait()
+        return
+    if job["status"] == "done":
+        # Hub models now live in models.json, which a fresh server start reads — retire the
+        # dialog registration so the two never diverge. Local-directory models are *skipped* by
+        # build_registry (machine-specific paths), so their user registration must stay.
+        with REG_LOCK:
+            entry = STATE["registry"].get(model_id)
+            if entry and entry.get("origin") == "user" and entry["mode"] != "local":
+                new_entry = {
+                    "ref": entry["ref"],
+                    "mode": entry["mode"],
+                    "label": entry.get("label"),
+                    "origin": "catalog",
+                }
+                if "steps" in entry:
+                    new_entry["steps"] = entry["steps"]
+                STATE["registry"][model_id] = new_entry
+                try:
+                    save_user_registry()
+                except OSError as e:
+                    job["log"].append(f"warning: could not update registry file: {e}")
+    print(f"conversion of {model_id}: {job['status']}", flush=True)
+
+
+@app.get("/models/{model_id}/convert")
+def convert_status(model_id: str):
+    with JOBS_LOCK:
+        job = JOBS.get(model_id)
+        if job is None:
+            raise HTTPException(404, f"no conversion job for {model_id!r}")
+        return {"id": model_id, "status": job["status"], "log": list(job["log"])[-8:]}
 
 
 def read_cache(cache_file: Path) -> dict | None:
@@ -402,6 +494,11 @@ def main() -> None:
         help="where models registered via the web dialog / POST /models persist",
     )
     ap.add_argument("--cache-dir", default=str(Path(__file__).resolve().parent / "probe-cache"))
+    ap.add_argument(
+        "--models-root",
+        default=str(Path(__file__).resolve().parent / "exported-models"),
+        help="where dialog-triggered ONNX conversions write <id>/step*/...; served back at /models/",
+    )
     ap.add_argument("--max-loaded", type=int, default=1, help="models kept in memory (heavy models: keep 1)")
     ap.add_argument(
         "--device-map",
@@ -416,6 +513,10 @@ def main() -> None:
     STATE["cache_dir"].mkdir(parents=True, exist_ok=True)
     STATE["max_loaded"] = args.max_loaded
     STATE["device_map"] = args.device_map
+    STATE["models_root"] = Path(args.models_root)
+    STATE["models_root"].mkdir(parents=True, exist_ok=True)
+    # serve converted ONNX pairs back to the app (mounted last so API routes keep precedence)
+    app.mount("/models", StaticFiles(directory=STATE["models_root"]), name="models")
     if args.extra:
         save_user_registry()  # --extra entries persist like dialog-registered ones
     print(f"registry: {sorted(STATE['registry'])}; cache: {STATE['cache_dir']}", flush=True)

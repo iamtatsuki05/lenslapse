@@ -90,6 +90,13 @@ are live-only (no precomputed prompts), and persist to `server/registry.json` ac
 The management API (`GET/POST/DELETE /models`) is unauthenticated by design — keep the server
 bound to localhost.
 
+Each registered model also has a **convert to ONNX** button that runs the full onboarding
+pipeline (`add_model.py`) on the server machine in the background (roughly a minute per sub-200M
+checkpoint). When it finishes, the model is in `web/public` + `models.json` like a shipped one:
+an app served from source (`npm run dev` with `LENSLAPSE_MODELS_DIR=server/exported-models`)
+picks it up on reload and runs it **fully in-browser**; for the deployed site, upload the ONNX
+pairs from `server/exported-models/<id>/` to your model host and rebuild.
+
 It runs plain `transformers` on CUDA/MPS/CPU (add `--device-map` to shard very large models via
 accelerate). We deliberately did **not** use vLLM/TGI: the logit lens needs the entire per-layer
 residual stream of one teacher-forced forward pass, which generation engines do not natively
