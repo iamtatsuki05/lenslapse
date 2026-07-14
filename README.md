@@ -128,6 +128,28 @@ engines neither expose natively nor accelerate. The server reuses the exact hook
 lens code that builds the precomputed shards, so its numbers agree with them by construction
 (verified 56/56 top-1 on Pythia-70M).
 
+## Script it: the CLI mirrors the UI
+
+Every interactive feature also runs headless from the terminal (`probe --json` prints the
+exact payload the web app receives; `trace --json` a step-by-step trajectory bundle):
+
+```bash
+lenslapse models add --ref /path/to/trainer_output --id my-run    # the “⚙ models” dialog
+lenslapse probe --model my-run --text "The capital of France is"  # the “Live probe” button
+lenslapse trace --model my-run --text "The capital of France is"  # “▶ trace across training”
+lenslapse models convert my-run                                   # the “convert to ONNX” button
+```
+
+Commands drive a running `lenslapse server` when one is reachable (default port 8017), sharing
+its registry, loaded weights, and probe cache; otherwise the same code runs in-process
+(`--local` forces this) against the same default on-disk state. Either way the results land in
+the shared probe cache, so a trajectory traced in the terminal replays instantly in the
+browser — and vice versa. `probe` prints the token ids you can feed back into `--targets`;
+`trace` fixes its tracked tokens from the final checkpoint exactly like the UI and the
+precomputed shards do. One caveat: while a server is running, do `models add`/`remove` through
+it (the default), not with `--local` — both sides rewrite the same registry file on change,
+and the last writer wins.
+
 ## Reproducibility of probes
 
 Every live probe result is persisted — in the browser (IndexedDB) and on the probe server

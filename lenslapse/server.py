@@ -602,16 +602,18 @@ def _webapp_candidates() -> list[Path]:
     return candidates
 
 
+def default_models_json() -> Path:
+    """The catalog the app itself uses: the checkout's copy, or the one bundled in the wheel."""
+    if _IN_REPO:
+        return _PKG_PARENT / "web/public/data/models.json"
+    return Path(__file__).resolve().parent / "webapp" / "data" / "models.json"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8017)
     ap.add_argument("--host", default="127.0.0.1")
-    default_models_json = (
-        _PKG_PARENT / "web/public/data/models.json"
-        if _IN_REPO
-        else Path(__file__).resolve().parent / "webapp" / "data" / "models.json"  # bundled in the wheel
-    )
-    ap.add_argument("--models-json", default=str(default_models_json))
+    ap.add_argument("--models-json", default=str(default_models_json()))
     ap.add_argument("--extra", action="append", default=[], help="id=hf_ref[:final] or id=/local/dir (repeatable)")
     ap.add_argument(
         "--registry-file",

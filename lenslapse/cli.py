@@ -16,6 +16,9 @@ usage: lenslapse <command> [options]
 
 commands:
   server       start the local probe server and open the web app (--no-open to skip)
+  probe        logit-lens one checkpoint from the terminal (the UI's "Live probe")
+  trace        probe every checkpoint (the UI's "trace across training")
+  models       list/add/remove/convert models (the UI's "models" dialog)
   add-model    convert a model to ONNX and register it for in-browser use
 """
 
@@ -39,6 +42,11 @@ def main() -> None:
             rest = [*rest, "--open"]
         sys.argv = ["lenslapse server", *rest]
         server_main()
+    elif command in ("probe", "trace", "models"):
+        from .client import main as client_main
+
+        sys.argv = ["lenslapse", command, *rest]
+        client_main()
     elif command == "add-model":
         from .add_model import main as add_model_main
 
