@@ -50,11 +50,11 @@ LENSLAPSE_MODELS_DIR=/path/to/converted/models npm run dev   # models dir option
 npm run typecheck && npm run test                            # TypeScript + vitest
 ```
 
-Python side (pipeline + probe server), from the repository root:
+Python side (pipeline + probe server), from the repository root, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pip install -e ".[dev]"
-ruff check lenslapse scripts server tests && mypy lenslapse tests && pytest tests
+uv sync        # creates .venv from uv.lock (dev tools included)
+uv run tox     # pytest (-n auto) + ruff + mypy
 ```
 
 Both suites run in CI (`.github/workflows/ci.yml`) on every push.
