@@ -130,7 +130,7 @@ const FRESH = new URLSearchParams(location.search).has('fresh')
 
 const APP_BASE = import.meta.env.BASE_URL
 // Models-root fallback chain: ?models= URL param > same-origin models/ > HF Hub dataset repo.
-const HF_DEFAULT = 'https://huggingface.co/datasets/iamtatsuki05/lenslapse-onnx/resolve/main/'
+const HF_DEFAULT = 'https://huggingface.co/iamtatsuki05/lenslapse-onnx/resolve/main/'
 
 // ORT's WASM runtime resolves via import.meta.url; Vite bundles the .wasm files as hashed assets
 // in both dev and build, so no wasmPaths override is needed and the site stays self-contained.

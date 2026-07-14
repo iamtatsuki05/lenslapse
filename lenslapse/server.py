@@ -13,9 +13,8 @@ for mutable refs (revision "main", local run directories) a re-trained model und
 path keeps replaying the old cached results — clear the cache directory after retraining.
 
 Usage:
-  pip install -e ".[server]"        (or: pip install fastapi uvicorn)
-  python server/probe_server.py --port 8017
-  # then open the app with ?probe=http://localhost:8017
+  lenslapse server                  (pip install; serves the bundled app + API on one port)
+  uv run lenslapse server           (repo checkout; serves the fresh web/dist build)
 
 The registry defaults to the app's models.json (hub suites with step{N} revisions); extend it
 with --extra for local runs or heavy hub models, e.g.:

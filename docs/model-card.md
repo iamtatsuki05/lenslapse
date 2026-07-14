@@ -41,12 +41,12 @@ top-1 lens predictions agree on 100.0% of (layer, position) cells over a 16-prom
 8000/64000/143000; the export-time probe over all 20 checkpoints shows a max logit diff of 0.0087.
 Dynamic int8 quantization was evaluated and rejected (final-layer top-1 agreement drops to 52%
 per-tensor / 71% per-channel at step 143000). See the LensLapse repository for the evaluation
-script (`scripts/fidelity_eval.py`).
+script (`lenslapse/fidelity_eval.py`).
 
 ## Reproduce
 
 ```bash
-python scripts/export_checkpoints.py --model EleutherAI/pythia-70m --out ./models
+uv run python -m lenslapse.export_checkpoints --model EleutherAI/pythia-70m --out ./models
 ```
 
 ## License and attribution

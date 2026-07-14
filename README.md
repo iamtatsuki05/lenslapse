@@ -3,7 +3,7 @@
 **A fully in-browser time-lapse for the logit lens: scrub across Pythia's public training checkpoints and watch next-token predictions crystallize from noise into knowledge — layer by layer, with zero backend.**
 
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
-- **Three model sizes** (Pythia 14M / 70M / 160M) switchable in the header; the recipe itself is architecture-generic (GPT-NeoX, GPT-2, and Llama-style RMSNorm models all pass the parity check — see `scripts/check_arch_parity.py`).
+- **Three model sizes** (Pythia 14M / 70M / 160M) switchable in the header; the recipe itself is architecture-generic (GPT-NeoX, GPT-2, and Llama-style RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`).
 - **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3×) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
 - Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
@@ -32,17 +32,17 @@ run `scripts/bundle_webapp.sh` after changing `web/` to refresh the packaged she
 
 ```
 Pythia checkpoint (HF Hub, revision step{N})
-   └─ scripts/export_checkpoints.py
+   └─ lenslapse/export_checkpoints.py
         ├─ backbone.f16.onnx   input_ids → hidden states [L+1, T, H]   (pre-ln, uniform; via forward hooks)
         └─ lens.f16.onnx       hidden [N, H] → logits [N, V]           (final_layer_norm + unembedding)
-   └─ scripts/precompute_lens.py → static JSON shards (top-10 per cell + exact target trajectories)
+   └─ lenslapse/precompute_lens.py → static JSON shards (top-10 per cell + exact target trajectories)
 
 web/ (Vite, vanilla JS)
    ├─ precomputed mode: fetch JSON shard → canvas grid + SVG trajectories (no model download)
    └─ live mode: onnxruntime-web (WebGPU→WASM fallback) + @huggingface/transformers tokenizer
 ```
 
-Key property: `lens(hidden[-1]) == model logits` **exactly** (validated per checkpoint at export). Weights are stored fp16 and cast to fp32 at session load; dynamic int8 was rejected because its final-layer top-1 agreement with fp32 drops to 52% (per-tensor; 71% per-channel) at late checkpoints (see `scripts/fidelity_eval.py`).
+Key property: `lens(hidden[-1]) == model logits` **exactly** (validated per checkpoint at export). Weights are stored fp16 and cast to fp32 at session load; dynamic int8 was rejected because its final-layer top-1 agreement with fp32 drops to 52% (per-tensor; 71% per-channel) at late checkpoints (see `lenslapse/fidelity_eval.py`).
 
 ## Develop
 
@@ -65,26 +65,25 @@ Both suites run in CI (`.github/workflows/ci.yml`) on every push.
 ## Convert checkpoints & precompute
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install torch transformers onnx onnxscript onnxruntime
-# per model id in web/public/data/models.json (NOTE: the default --steps list is the 20-step live
+# uv sync first (see Develop); per model id in web/public/data/models.json
+# (NOTE: the default --steps list is the 20-step live
 # set; the shipped 14m/70m precomputed data uses a denser 38-step list — pass it explicitly to
 # reproduce, or you will overwrite the shipped shards with a coarser grid):
-python scripts/export_checkpoints.py --model EleutherAI/pythia-70m --out /path/to/models/pythia-70m
-python scripts/precompute_lens.py    --model EleutherAI/pythia-70m \
+uv run python -m lenslapse.export_checkpoints --model EleutherAI/pythia-70m --out /path/to/models/pythia-70m
+uv run python -m lenslapse.precompute_lens  --model EleutherAI/pythia-70m \
   --steps 0,1,2,4,8,16,32,64,128,256,512,1000,2000,3000,4000,6000,8000,12000,16000,20000,24000,28000,32000,36000,40000,48000,56000,64000,72000,80000,88000,96000,104000,112000,120000,128000,136000,143000 \
   --out web/public/data/pythia-70m
-python scripts/fidelity_eval.py --out /tmp/fidelity_report.json     # weight-format fidelity table
-python scripts/check_arch_parity.py --model gpt2                    # lens-identity check on any HF decoder
+uv run python -m lenslapse.fidelity_eval --out /tmp/fidelity_report.json     # weight-format fidelity table
+uv run python -m lenslapse.check_arch_parity --model gpt2      # lens-identity check on any HF decoder
 ```
 
 ## Add your own model (Hub or local)
 
 ```bash
 # any HF checkpoint suite (step{N} revisions), a single HF model, or a local HF-Trainer run dir:
-python scripts/add_model.py --model EleutherAI/pythia-31m --id pythia-31m --label "Pythia 31M"     --steps 0,512,8000,143000 --models-root /path/to/models
-python scripts/add_model.py --model gpt2 --id gpt2 --label "GPT-2 124M" --final-only --models-root /path/to/models
-python scripts/add_model.py --model /path/to/trainer_output --id my-run --label "My run" --models-root /path/to/models
+uv run lenslapse add-model --model EleutherAI/pythia-31m --id pythia-31m --label "Pythia 31M"     --steps 0,512,8000,143000 --models-root /path/to/models
+uv run lenslapse add-model --model gpt2 --id gpt2 --label "GPT-2 124M" --final-only --models-root /path/to/models
+uv run lenslapse add-model --model /path/to/trainer_output --id my-run --label "My run" --models-root /path/to/models
 ```
 
 One command exports the ONNX pairs (parity-checked), precomputes the lens shards, installs the
@@ -97,7 +96,7 @@ For models too large to download into a browser, run the optional probe server:
 
 ```bash
 pip install -e ".[server]"
-python server/probe_server.py --port 8017 --extra my-big-model=meta-llama/Llama-3.2-1B:final
+lenslapse server --extra my-big-model=meta-llama/Llama-3.2-1B:final   # or: uv run lenslapse server
 # a locally served app (npm run dev / preview) finds the default port by itself;
 # probe any suite step — the badge switches to "live · server"
 ```
