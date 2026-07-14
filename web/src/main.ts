@@ -1110,7 +1110,14 @@ async function boot(): Promise<void> {
       await (fn === 'png' ? exportPng : exportPdf)(exportView())
       status(`${label} exported`)
     } catch (e) {
-      status(`export failed: ${(e as Error).message}`)
+      const msg = (e as Error).message
+      // the export chunk loads lazily; if the site was redeployed since this tab loaded, the
+      // old hashed chunk is gone and the import 404s — a reload gets the current build
+      if (/dynamically imported module|Failed to fetch|error loading/i.test(msg)) {
+        status('export failed: this tab is running an older build of the app — reload the page (⌘R) and retry')
+      } else {
+        status(`export failed: ${msg}`)
+      }
     }
   }
   $('export-png').addEventListener('click', () => runExport('png', 'PNG figure'))
