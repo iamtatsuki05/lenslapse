@@ -134,10 +134,14 @@ const compareGrid = new LensGrid($<HTMLCanvasElement>('compare-canvas'), {
   },
 })
 
+// a function call, not an inline comparison: TS control-flow narrowing would otherwise pin
+// state.gridView to 'top1' across the awaits below and reject the re-check
+const compareAllowed = (): boolean => state.mode === 'pre' && state.gridView !== 'acq'
+
 /** Render the compared model's grid at its checkpoint nearest to the current step. */
 async function refreshCompare(): Promise<void> {
   const wrap = $('compare-wrap')
-  if (!state.compareId || state.mode !== 'pre' || state.gridView === 'acq') {
+  if (!state.compareId || !compareAllowed()) {
     wrap.hidden = true
     return
   }
@@ -157,7 +161,7 @@ async function refreshCompare(): Promise<void> {
     if (gen !== viewGen || cmpId !== state.compareId) return
     // the acq toggle does not bump viewGen — re-check the entry conditions after every await,
     // or a slow first shard load could un-hide compare underneath the acquisition map
-    if (state.mode !== 'pre' || state.gridView === 'acq') return
+    if (!compareAllowed()) return
     const g = gridFromShard(shard, step)
     if (!g) return
     wrap.hidden = false
