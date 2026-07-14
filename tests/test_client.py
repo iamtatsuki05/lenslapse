@@ -183,30 +183,33 @@ def test_main_routes_bare_models_to_list(monkeypatch: pytest.MonkeyPatch, capsys
     assert picked[0].server is None and picked[0].local is False and picked[0].device_map is False
 
 
+def conn_ns(**kw: Any) -> argparse.Namespace:
+    base = dict(server=None, local=False, device_map=False, dtype="float32")
+    return argparse.Namespace(**{**base, **kw})
+
+
 def test_choose_backend_auto_detects_then_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     created: list[str] = []
 
     class StubLocal:
         where = "in-process"
 
-        def __init__(self, device_map: bool = False) -> None:
+        def __init__(self, device_map: bool = False, dtype: str = "float32") -> None:
             created.append("local")
 
     monkeypatch.setattr(client, "LocalBackend", StubLocal)
     monkeypatch.setattr(client, "server_alive", lambda base: True)
-    args = argparse.Namespace(server=None, local=False, device_map=False)
-    assert isinstance(client.choose_backend(args), HttpBackend)
+    assert isinstance(client.choose_backend(conn_ns()), HttpBackend)
 
     monkeypatch.setattr(client, "server_alive", lambda base: False)
-    assert client.choose_backend(args).where == "in-process"
+    assert client.choose_backend(conn_ns()).where == "in-process"
 
-    args_local = argparse.Namespace(server=None, local=True, device_map=False)
     monkeypatch.setattr(client, "server_alive", lambda base: pytest.fail("--local must not even look for a server"))
-    assert client.choose_backend(args_local).where == "in-process"
+    assert client.choose_backend(conn_ns(local=True)).where == "in-process"
 
     with pytest.raises(SystemExit, match="no probe server responding"):
         monkeypatch.setattr(client, "server_alive", lambda base: False)
-        client.choose_backend(argparse.Namespace(server="http://localhost:9", local=False, device_map=False))
+        client.choose_backend(conn_ns(server="http://localhost:9"))
 
 
 def test_http_backend_surfaces_server_error_details(monkeypatch: pytest.MonkeyPatch) -> None:

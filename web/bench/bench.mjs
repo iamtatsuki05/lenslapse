@@ -104,7 +104,11 @@ for (const cell of CELLS) {
       const cdp = await context.newCDPSession(page)
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: cell.throttle })
     }
-    await page.goto(`${BASE}/?ep=${cell.ep}#m=${cell.model}`)
+    // probe=off: the bench measures the in-browser ONNX path — never attach to a probe server
+    // that happens to be running on this machine (it would replace the engine being measured).
+    // fresh: bypass saved-probe replay — replayed results carry their *stored* timing, which
+    // would silently report the first probe's latency as the warm mean.
+    await page.goto(`${BASE}/?ep=${cell.ep}&probe=off&fresh#m=${cell.model}`)
     await page.waitForFunction(() => window.__lenslapse?.state?.model, null, { timeout: 30000 })
     const m = await measureCell(page, cell, PROMPTS[cell.prompt])
     const row = { ...cell, browserVersion: browser.version(), ...m }

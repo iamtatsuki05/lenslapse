@@ -125,8 +125,11 @@ It runs plain `transformers` on CUDA/MPS/CPU (add `--device-map` to shard very l
 accelerate): the logit lens needs the entire per-layer residual stream of one teacher-forced
 forward pass — a batch-1 workload with no decoding loop, which generation-oriented serving
 engines neither expose natively nor accelerate. The server reuses the exact hooked-forward +
-lens code that builds the precomputed shards, so its numbers agree with them by construction
-(verified 56/56 top-1 on Pythia-70M).
+lens code that builds the precomputed shards and computes in fp32 by default, so its numbers
+agree with them (verified 56/56 top-1 on Pythia-70M). Half-precision *compute* is not free:
+an fp16 forward already flips 5/56 late-checkpoint top-1s, so `--dtype float16/bfloat16`
+(halving memory for heavy models) is an explicit opt-in, and results at different dtypes
+never replay for one another in the probe cache.
 
 ## Script it: the CLI mirrors the UI
 

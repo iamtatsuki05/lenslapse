@@ -205,3 +205,40 @@ def test_probe_cache_key_cannot_collide_across_text_and_targets() -> None:
     assert probe_cache_key(src, ProbeRequest(model="m", step=0, text="foo", targets=[5, 3, 5])) == probe_cache_key(
         src, ProbeRequest(model="m", step=0, text="foo", targets=[3, 5])
     )
+
+
+def test_probe_cache_key_includes_compute_dtype(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fp16 and fp32 forwards genuinely disagree at late checkpoints — one must not replay as the other."""
+    from lenslapse.server import ProbeRequest, probe_cache_key
+    from lenslapse.sources import CheckpointSource
+
+    src = CheckpointSource("org/m", "step0", 0)
+    req = ProbeRequest(model="m", step=0, text="foo")
+    fp32_key = probe_cache_key(src, req)
+    monkeypatch.setitem(server.STATE, "dtype", "float16")
+    assert probe_cache_key(src, req) != fp32_key
+
+
+def test_load_defaults_to_float32_compute(monkeypatch: pytest.MonkeyPatch) -> None:
+    from lenslapse.sources import CheckpointSource
+
+    seen: dict[str, Any] = {}
+
+    class StubModel:
+        def to(self, device: str) -> "StubModel":
+            return self
+
+        def eval(self) -> "StubModel":
+            return self
+
+    class StubAuto:
+        @staticmethod
+        def from_pretrained(ref: str, **kwargs: Any) -> Any:
+            seen.update(kwargs)
+            return StubModel()
+
+    monkeypatch.setattr(server, "AutoModelForCausalLM", StubAuto)
+    monkeypatch.setattr(server, "AutoTokenizer", StubAuto)
+    monkeypatch.setattr(server, "LOADED", server.OrderedDict())
+    server.load(CheckpointSource("org/m", "step0", 0))
+    assert seen["dtype"] == "float32"

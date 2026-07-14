@@ -116,7 +116,7 @@ class LocalBackend:
 
     where = "in-process"
 
-    def __init__(self, device_map: bool = False) -> None:
+    def __init__(self, device_map: bool = False, dtype: str = "float32") -> None:
         from . import server  # deferred: imports torch, which HTTP mode must not pay for
 
         self._server = server
@@ -127,6 +127,7 @@ class LocalBackend:
         server.STATE["cache_dir"] = server._STATE_HOME / "probe-cache"
         server.STATE["cache_dir"].mkdir(parents=True, exist_ok=True)
         server.STATE["max_loaded"] = 1
+        server.STATE["dtype"] = dtype
         server.STATE["device_map"] = device_map
 
     def _call(self, fn: Callable[..., _T], *args: Any) -> _T:
@@ -175,7 +176,7 @@ def choose_backend(args: argparse.Namespace) -> Backend:
         return HttpBackend(DEFAULT_SERVER)
     if not args.local:
         _eprint(f"no probe server at {DEFAULT_SERVER} — running in-process")
-    return LocalBackend(device_map=args.device_map)
+    return LocalBackend(device_map=args.device_map, dtype=args.dtype)
 
 
 def parse_targets(spec: str | None) -> list[int] | None:
@@ -368,6 +369,12 @@ def main() -> None:
     )
     conn.add_argument("--local", action="store_true", help="run in-process even if a probe server is running")
     conn.add_argument("--device-map", action="store_true", help="in-process only: load with device_map='auto'")
+    conn.add_argument(
+        "--dtype",
+        choices=["float32", "float16", "bfloat16", "auto"],
+        default="float32",
+        help="in-process only: compute dtype (float32 matches the shards; lower halves memory)",
+    )
 
     ap = argparse.ArgumentParser(
         prog="lenslapse", description="Terminal access to everything the web app's UI can do."
@@ -394,7 +401,7 @@ def main() -> None:
     pt.add_argument("--json", action="store_true", help="print the whole trajectory as JSON (table goes away)")
 
     pm = sub.add_parser("models", help='list/add/remove/convert models — the UI\'s "models" dialog')
-    pm.set_defaults(action=None, server=None, local=False, device_map=False)
+    pm.set_defaults(action=None, server=None, local=False, device_map=False, dtype="float32")
     msub = pm.add_subparsers(dest="action")
     msub.add_parser("list", parents=[conn], help="show every registered model")
     ma = msub.add_parser("add", parents=[conn], help="register a model (HF id or a folder on the server machine)")

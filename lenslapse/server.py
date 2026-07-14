@@ -94,7 +94,14 @@ async def allow_private_network(request: Request, call_next: Callable[[Request],
     return response
 
 
-STATE: dict = {"registry": {}, "cache_dir": None, "max_loaded": 1, "device_map": False, "registry_file": None}
+STATE: dict = {
+    "registry": {},
+    "cache_dir": None,
+    "max_loaded": 1,
+    "device_map": False,
+    "registry_file": None,
+    "dtype": "float32",
+}
 LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
 # FastAPI runs sync endpoints in a threadpool; lens_all installs forward hooks on the shared
 # model, so concurrent probes would capture each other's layer outputs (and persist the garbage
@@ -231,13 +238,17 @@ def load(src: CheckpointSource) -> tuple[Any, Any]:
             torch.cuda.empty_cache()
         print(f"evicted {old_key}", flush=True)
     tok = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision)
+    # float32 by default: half-precision *compute* flips late-checkpoint top-1s (5/56 cells on
+    # Pythia-70M step 143k), the same failure mode that ruled out int8 storage — the browser
+    # path avoids it by casting fp16 weights to fp32 at session load, and the server must match
+    # the shards it claims to agree with. --dtype float16/bfloat16 halves memory for heavy models.
     if STATE["device_map"]:
         # opt-in: shard very large models across devices via accelerate
         model = AutoModelForCausalLM.from_pretrained(
-            src.load_ref, revision=src.revision, dtype="auto", device_map="auto"
+            src.load_ref, revision=src.revision, dtype=STATE["dtype"], device_map="auto"
         )
     else:
-        model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype="auto")
+        model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=STATE["dtype"])
         model.to(pick_device())
     model.eval()
     LOADED[key] = (model, tok)
@@ -479,8 +490,10 @@ def convert_status(model_id: str) -> dict[str, Any]:
 
 def probe_cache_key(src: CheckpointSource, req: ProbeRequest) -> str:
     """Content key for one probe. JSON-encoded fields, not string concatenation: free-form
-    prompt text must never be able to collide with the key of a different (text, targets)."""
-    payload = [src.load_ref, src.revision, req.text, sorted(set(req.targets or []))]
+    prompt text must never be able to collide with the key of a different (text, targets).
+    The compute dtype is part of the key: fp16 and fp32 forwards genuinely disagree at late
+    checkpoints, so a result computed at one precision must not replay as another."""
+    payload = [src.load_ref, src.revision, req.text, sorted(set(req.targets or [])), STATE["dtype"]]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -564,6 +577,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
         **({"tgt": tgt} if tgt else {}),
         "timing": {"total": round((t2 - t0) * 1000), "forward": round((t2 - t1) * 1000)},
         "device": str(device),
+        "dtype": STATE["dtype"],
         "cached": False,
     }
     tmp = cache_file.with_suffix(".tmp")
@@ -628,6 +642,13 @@ def main() -> None:
     )
     ap.add_argument("--max-loaded", type=int, default=1, help="models kept in memory (heavy models: keep 1)")
     ap.add_argument(
+        "--dtype",
+        choices=["float32", "float16", "bfloat16", "auto"],
+        default="float32",
+        help="compute dtype; float32 (default) matches the precomputed shards and the browser path, "
+        "lower precisions halve memory for heavy models but can flip late-checkpoint top-1s",
+    )
+    ap.add_argument(
         "--device-map",
         action="store_true",
         help="load with device_map='auto' (requires accelerate; multi-device sharding is untested)",
@@ -640,6 +661,7 @@ def main() -> None:
     STATE["cache_dir"] = Path(args.cache_dir)
     STATE["cache_dir"].mkdir(parents=True, exist_ok=True)
     STATE["max_loaded"] = args.max_loaded
+    STATE["dtype"] = args.dtype
     STATE["device_map"] = args.device_map
     STATE["models_root"] = Path(args.models_root)
     STATE["models_root"].mkdir(parents=True, exist_ok=True)
