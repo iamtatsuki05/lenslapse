@@ -6,7 +6,7 @@
 const DB = 'lenslapse-probes'
 const STORE = 'probes'
 
-function openDb() {
+function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB, 1)
     req.onupgradeneeded = () => req.result.createObjectStore(STORE)
@@ -15,11 +15,11 @@ function openDb() {
   })
 }
 
-export function probeKey(modelId, step, text) {
+export function probeKey(modelId: string, step: number, text: string): string {
   return `${modelId}|${step}|${text}`
 }
 
-export async function getProbe(key) {
+export async function getProbe<T>(key: string): Promise<T | null> {
   try {
     const db = await openDb()
     return await new Promise((resolve) => {
@@ -32,7 +32,7 @@ export async function getProbe(key) {
   }
 }
 
-export async function putProbe(key, value) {
+export async function putProbe(key: string, value: unknown): Promise<void> {
   try {
     const db = await openDb()
     await new Promise((resolve) => {

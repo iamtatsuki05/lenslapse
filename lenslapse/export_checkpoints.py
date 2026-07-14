@@ -21,6 +21,7 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import onnx
@@ -31,7 +32,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .arch import resolve
 from .onnx_f16 import save_f16
-from .sources import resolve_sources
+from .sources import CheckpointSource, resolve_sources
 
 PROBE = "The capital of Japan is the city of"
 
@@ -46,7 +47,7 @@ class Backbone(torch.nn.Module):
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         captured: list[torch.Tensor] = []
 
-        def cap(_m, _i, o):
+        def cap(_m: object, _i: object, o: object) -> None:
             captured.append(o[0] if isinstance(o, tuple) else o)
 
         hooks = [layer.register_forward_hook(cap) for layer in self.blocks]
@@ -106,7 +107,7 @@ def build_lens_onnx(model: AutoModelForCausalLM, path: Path) -> None:
     onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)]), str(path))
 
 
-def export_source(src, out_dir: Path, tok) -> dict:
+def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str, Any]:
     rev = src.name
     model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=torch.float32)
     model.eval()

@@ -47,7 +47,17 @@ Key property: `lens(hidden[-1]) == model logits` **exactly** (validated per chec
 cd web
 npm install
 LENSLAPSE_MODELS_DIR=/path/to/converted/models npm run dev   # models dir optional (precomputed mode works without)
+npm run typecheck && npm run test                            # TypeScript + vitest
 ```
+
+Python side (pipeline + probe server), from the repository root:
+
+```bash
+pip install -e ".[dev]"
+ruff check lenslapse scripts server tests && mypy lenslapse tests && pytest tests
+```
+
+Both suites run in CI (`.github/workflows/ci.yml`) on every push.
 
 ## Convert checkpoints & precompute
 

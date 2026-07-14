@@ -92,6 +92,7 @@ def main() -> None:
         mode = "local"
     else:
         mode = "suite"
+    assert catalog is not None  # in_repo is True on this path, so the catalog was loaded above
     entry = {"id": args.id, "hf": args.id, "label": args.label, "mode": mode, "source": args.model}
     if mode == "suite":
         # record the step grid: consumers with no shard data (e.g. the probe server) need it

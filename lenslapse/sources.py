@@ -29,15 +29,14 @@ def resolve_sources(
 ) -> list[CheckpointSource]:
     path = Path(model)
     if path.exists() and path.is_dir():
-        ckpts = [c for c in path.glob("checkpoint-*") if _ckpt_step(c) is not None]
-        ckpts.sort(key=_ckpt_step)
+        ckpts = sorted((step, c) for c in path.glob("checkpoint-*") if (step := _ckpt_step(c)) is not None)
         if ckpts:
             if final_only:
                 raise SystemExit(
                     f"{model} is a Trainer directory with checkpoint-* subdirs; --final-only is ambiguous — "
                     "pass the specific checkpoint directory instead"
                 )
-            return [CheckpointSource(str(c), None, _ckpt_step(c)) for c in ckpts]
+            return [CheckpointSource(str(c), None, step) for step, c in ckpts]
         # plain local model directory: single checkpoint at step 0
         return [CheckpointSource(str(path), None, 0)]
     if final_only:

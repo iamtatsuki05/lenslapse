@@ -38,19 +38,21 @@ import threading
 import time
 import webbrowser
 from collections import OrderedDict, deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any, Literal
 
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import model_info
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .precompute_lens import lens_all
-from .sources import resolve_sources
+from .sources import CheckpointSource, resolve_sources
 
 TOPK = 10
 MAX_TOKENS = 64
@@ -83,7 +85,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 @app.middleware("http")
-async def allow_private_network(request, call_next):
+async def allow_private_network(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     # Chrome's Private Network Access: an HTTPS page (e.g. the GitHub Pages deployment) probing
     # this localhost server sends a preflight with Access-Control-Request-Private-Network; without
     # this response header the browser refuses (or stalls) the request.
@@ -114,71 +116,85 @@ class ProbeRequest(BaseModel):
 class RegisterRequest(BaseModel):
     id: str
     ref: str  # HF id or a directory on the server machine
-    mode: str  # "suite" | "final" | "local"
+    mode: str  # "suite" | "final" | "local" (checked with a 400, not a 422, for a friendlier message)
     label: str | None = None
     steps: list[int] | None = None  # suite only; defaults to the Pythia step grid
 
 
-def build_registry(models_json: Path | None, registry_file: Path | None, extras: list[str]) -> dict:
-    registry: dict = {}
+class RegistryEntry(BaseModel):
+    """One probeable model. Serialized (minus origin) to the registry file."""
+
+    ref: str
+    mode: Literal["suite", "final", "local"]
+    label: str | None = None
+    steps: list[int] | None = None  # suite only
+    origin: Literal["catalog", "user"] = "user"
+
+
+def build_registry(
+    models_json: Path | None, registry_file: Path | None, extras: list[str]
+) -> dict[str, RegistryEntry]:
+    registry: dict[str, RegistryEntry] = {}
     if models_json and models_json.exists():
         for m in json.loads(models_json.read_text())["models"]:
-            mode = m.get("mode", "suite")
-            if mode == "local":
+            if m.get("mode", "suite") == "local":
                 continue  # local paths are machine-specific; register via --extra id=/path
             # "source" is the true HF ref; "hf" doubles as the app's local tokenizer directory
             # name, which for add_model.py onboarded models is the app id, not a Hub id.
-            registry[m["id"]] = {
-                "ref": m.get("source", m["hf"]),
-                "mode": mode,
-                "label": m.get("label"),
-                "origin": "catalog",
-                **({"steps": m["steps"]} if "steps" in m else {}),
-            }
+            registry[m["id"]] = RegistryEntry(
+                ref=m.get("source", m["hf"]),
+                mode=m.get("mode", "suite"),
+                label=m.get("label"),
+                steps=m.get("steps"),
+                origin="catalog",
+            )
     if registry_file and registry_file.exists():
-        for mid, entry in json.loads(registry_file.read_text()).items():
-            registry[mid] = {**entry, "origin": "user"}
+        try:
+            for mid, entry in json.loads(registry_file.read_text()).items():
+                registry[mid] = RegistryEntry(**{**entry, "origin": "user"})
+        except (json.JSONDecodeError, ValidationError) as err:
+            raise SystemExit(f"{registry_file} is corrupt ({err}); fix or delete it") from err
     for e in extras:
         mid, sep, ref = e.partition("=")
         if not sep or not mid or not ref:
             raise SystemExit(f"--extra expects id=hf_ref[:final] or id=/local/dir, got {e!r}")
-        mode = "suite"
+        mode: Literal["suite", "final", "local"] = "suite"
         if ref.endswith(":final"):
             ref, mode = ref[: -len(":final")], "final"
         elif Path(ref).is_dir():
             mode = "local"
-        registry[mid] = {"ref": ref, "mode": mode, "label": None, "origin": "user"}
+        registry[mid] = RegistryEntry(ref=ref, mode=mode, origin="user")
     return registry
 
 
 def save_user_registry() -> None:
     """Persist user-registered entries (dialog/API/--extra) so they survive restarts."""
-    path = STATE["registry_file"]
+    path: Path = STATE["registry_file"]
     entries = {
-        mid: {k: v for k, v in e.items() if k != "origin"}
+        mid: e.model_dump(exclude={"origin"}, exclude_none=True)
         for mid, e in STATE["registry"].items()
-        if e.get("origin") == "user"
+        if e.origin == "user"
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(entries, indent=2) + "\n")
     os.replace(tmp, path)
 
 
-def model_steps(entry: dict) -> list[int]:
-    if entry["mode"] == "final":
+def model_steps(entry: RegistryEntry) -> list[int]:
+    if entry.mode == "final":
         return [0]
-    if entry["mode"] == "local":
-        if not Path(entry["ref"]).is_dir():
+    if entry.mode == "local":
+        if not Path(entry.ref).is_dir():
             return []  # directory gone since registration; probing it 404s with an explicit message
-        return [src.step for src in resolve_sources(entry["ref"], "0", final_only=False)]
-    return entry.get("steps") or DEFAULT_SUITE_STEPS
+        return [src.step for src in resolve_sources(entry.ref, "0", final_only=False)]
+    return entry.steps or DEFAULT_SUITE_STEPS
 
 
-def source_for(model_id: str, step: int):
+def source_for(model_id: str, step: int) -> CheckpointSource:
     entry = STATE["registry"].get(model_id)
     if entry is None:
         raise HTTPException(404, f"unknown model id {model_id!r}; register it via --extra")
-    mode, ref = entry["mode"], entry["ref"]
+    mode, ref = entry.mode, entry.ref
     if mode == "final":
         return resolve_sources(ref, "0", final_only=True)[0]
     if mode == "local":
@@ -200,7 +216,7 @@ def pick_device() -> str:
     return "cpu"
 
 
-def load(src):
+def load(src: CheckpointSource) -> tuple[Any, Any]:
     key = (src.load_ref, src.revision)
     if key in LOADED:
         LOADED.move_to_end(key)
@@ -227,7 +243,7 @@ def load(src):
 
 
 @app.get("/health")
-def health():
+def health() -> dict[str, Any]:
     return {"ok": True, "models": sorted(STATE["registry"]), "device": pick_device()}
 
 
@@ -248,7 +264,7 @@ def _folder_dialog_cmd() -> list[str] | None:
 
 
 @app.get("/pick-folder")
-def pick_folder():
+def pick_folder() -> dict[str, str]:
     """Open a native folder dialog on the server machine and return the chosen absolute path.
 
     Lets the dialog's "browse" button fill in local checkpoint paths for people who do not
@@ -281,15 +297,15 @@ def pick_folder():
 
 
 @app.get("/models")
-def list_models():
+def list_models() -> list[dict[str, Any]]:
     return [
         {
             "id": mid,
-            "ref": e["ref"],
-            "mode": e["mode"],
-            "label": e.get("label") or mid,
+            "ref": e.ref,
+            "mode": e.mode,
+            "label": e.label or mid,
             "steps": model_steps(e),
-            "origin": e.get("origin", "user"),
+            "origin": e.origin,
         }
         for mid, e in sorted(STATE["registry"].items())
     ]
@@ -315,7 +331,7 @@ def validate_source(req: RegisterRequest) -> None:
 
 
 @app.post("/models", status_code=201)
-def register_model(req: RegisterRequest):
+def register_model(req: RegisterRequest) -> dict[str, Any]:
     if not MODEL_ID_RE.fullmatch(req.id):
         raise HTTPException(400, "id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     if req.mode not in ("suite", "final", "local"):
@@ -332,9 +348,12 @@ def register_model(req: RegisterRequest):
     with REG_LOCK:
         if req.id in STATE["registry"]:
             raise HTTPException(409, f"model id {req.id!r} is already registered; remove it first")
-        entry = {"ref": req.ref, "mode": req.mode, "label": req.label, "origin": "user"}
-        if req.mode == "suite" and req.steps:
-            entry["steps"] = sorted(set(req.steps))
+        entry = RegistryEntry(
+            ref=req.ref,
+            mode=req.mode,  # type: ignore[arg-type]  # validated to the Literal above
+            label=req.label,
+            steps=sorted(set(req.steps)) if req.mode == "suite" and req.steps else None,
+        )
         STATE["registry"][req.id] = entry
         try:
             save_user_registry()
@@ -342,11 +361,11 @@ def register_model(req: RegisterRequest):
             del STATE["registry"][req.id]  # keep memory and registry.json consistent
             raise HTTPException(500, f"could not persist registry: {e}") from e
     print(f"registered {req.id} -> {req.ref} ({req.mode})", flush=True)
-    return {"id": req.id, **{k: v for k, v in entry.items() if k != "origin"}, "steps": model_steps(entry)}
+    return {"id": req.id, **entry.model_dump(exclude={"origin"}, exclude_none=True), "steps": model_steps(entry)}
 
 
 @app.delete("/models/{model_id}")
-def unregister_model(model_id: str):
+def unregister_model(model_id: str) -> dict[str, str]:
     with JOBS_LOCK:
         job = JOBS.get(model_id)
         if job and job["status"] == "running":
@@ -356,7 +375,7 @@ def unregister_model(model_id: str):
         entry = STATE["registry"].get(model_id)
         if entry is None:
             raise HTTPException(404, f"unknown model id {model_id!r}")
-        if entry.get("origin") == "catalog":
+        if entry.origin == "catalog":
             raise HTTPException(400, f"{model_id!r} comes from models.json; edit that file instead")
         del STATE["registry"][model_id]
         try:
@@ -370,27 +389,27 @@ def unregister_model(model_id: str):
 
 
 @app.post("/models/{model_id}/convert", status_code=202)
-def convert_model(model_id: str):
+def convert_model(model_id: str) -> dict[str, str]:
     """Run the full ONNX onboarding pipeline (add_model.py) for a registered model, in the
     background. On success the model graduates into web/public + models.json (browser-runnable
     after the app is rebuilt or served from source), and its dialog registration is retired."""
     entry = STATE["registry"].get(model_id)
     if entry is None:
         raise HTTPException(404, f"unknown model id {model_id!r}")
-    if entry.get("origin") == "catalog":
+    if entry.origin == "catalog":
         raise HTTPException(400, f"{model_id!r} is already in models.json (already converted or shipped)")
     cmd = [
         sys.executable,
         "-m", "lenslapse.add_model",
-        "--model", entry["ref"],
+        "--model", entry.ref,
         "--id", model_id,
-        f"--label={entry.get('label') or model_id}",  # = form: a label starting with '-' must not read as an option
+        f"--label={entry.label or model_id}",  # = form: a label starting with '-' must not read as an option
         "--models-root", str(STATE["models_root"]),
         "--force",  # explicit user action: re-converting the same id overwrites its own artifacts
     ]  # fmt: skip
-    if entry["mode"] == "final":
+    if entry.mode == "final":
         cmd.append("--final-only")
-    elif entry["mode"] == "suite":
+    elif entry.mode == "suite":
         cmd += ["--steps", ",".join(str(s) for s in model_steps(entry))]
     with JOBS_LOCK:
         # check-and-set under one lock: concurrent POSTs must not start two export subprocesses
@@ -413,6 +432,7 @@ def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", env=env
         )
+        assert proc.stdout is not None  # PIPE was requested
         for line in proc.stdout:
             job["log"].append(line.rstrip())
         proc.wait()
@@ -432,16 +452,8 @@ def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
             entry = STATE["registry"].get(model_id)
             # pip installs have no models.json, so add_model exports only — the registration
             # must stay a user entry there, or it would vanish from the registry on restart
-            if entry and entry.get("origin") == "user" and entry["mode"] != "local" and _IN_REPO:
-                new_entry = {
-                    "ref": entry["ref"],
-                    "mode": entry["mode"],
-                    "label": entry.get("label"),
-                    "origin": "catalog",
-                }
-                if "steps" in entry:
-                    new_entry["steps"] = entry["steps"]
-                STATE["registry"][model_id] = new_entry
+            if entry and entry.origin == "user" and entry.mode != "local" and _IN_REPO:
+                STATE["registry"][model_id] = entry.model_copy(update={"origin": "catalog"})
                 try:
                     save_user_registry()
                 except OSError as e:
@@ -450,7 +462,7 @@ def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
 
 
 @app.get("/models/{model_id}/convert")
-def convert_status(model_id: str):
+def convert_status(model_id: str) -> dict[str, Any]:
     with JOBS_LOCK:
         job = JOBS.get(model_id)
         if job is None:
@@ -477,7 +489,7 @@ def read_cache(cache_file: Path) -> dict | None:
 
 
 @app.post("/probe")
-def probe(req: ProbeRequest):
+def probe(req: ProbeRequest) -> dict[str, Any]:
     src = source_for(req.model, req.step)
     cache_key = hashlib.sha256(f"{src.load_ref}@{src.revision}::{req.text}".encode()).hexdigest()
     cache_file = STATE["cache_dir"] / f"{cache_key}.json"
@@ -491,7 +503,7 @@ def probe(req: ProbeRequest):
         return _probe_locked(req, src, cache_file)
 
 
-def _probe_locked(req: ProbeRequest, src, cache_file: Path):
+def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) -> dict[str, Any]:
     t0 = time.time()
     model, tok = load(src)
     ids = tok(req.text)["input_ids"]

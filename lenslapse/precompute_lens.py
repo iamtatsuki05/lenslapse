@@ -19,6 +19,7 @@ actual output distribution (validated in export_checkpoints.py).
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -53,12 +54,12 @@ TOPK = 10
 
 
 @torch.no_grad()
-def lens_all(model, input_ids):
+def lens_all(model: "torch.nn.Module", input_ids: "torch.Tensor") -> "torch.Tensor":
     """Returns per-layer pre-final-norm hidden states passed through the lens head. [L+1, T, V] log-probs."""
     handles = resolve(model)
-    captured = []
+    captured: list[torch.Tensor] = []
 
-    def cap(_m, _i, o):
+    def cap(_m: object, _i: object, o: object) -> None:
         captured.append(o[0] if isinstance(o, tuple) else o)
 
     hooks = [layer.register_forward_hook(cap) for layer in handles.layers]
@@ -96,7 +97,7 @@ def main() -> None:
     final_step = steps[-1]
     tok = AutoTokenizer.from_pretrained(sources[0].load_ref, revision=sources[0].revision)
 
-    prompts = []
+    prompts: list[dict[str, Any]] = []
     for i, p in enumerate(PROMPTS):
         ids = tok(p["text"])["input_ids"]
         # no special tokens: a BOS-prepending tokenizer (Llama-style) would make gold_id the BOS id
@@ -105,8 +106,8 @@ def main() -> None:
 
     # Pass 1: final step first to fix per-position targets.
     order = [final_step] + [s for s in steps if s != final_step]
-    targets: dict[int, list[list[int]]] = {}  # prompt_id -> [pos] -> target ids
-    shards: dict[int, dict] = {i: {"vocab": {}, "steps": {}} for i in range(len(prompts))}
+    targets: dict[Any, list[list[int]]] = {}  # prompt_id -> [pos] -> target ids
+    shards: dict[Any, dict[str, Any]] = {i: {"vocab": {}, "steps": {}} for i in range(len(prompts))}
 
     for step in order:
         src = by_step[step]
@@ -126,7 +127,7 @@ def main() -> None:
 
             sh = shards[p["id"]]
             tg = targets[p["id"]]
-            entry = {
+            entry: dict[str, Any] = {
                 "top": [
                     [
                         [[int(top.indices[li, t, k]), round(float(top.values[li, t, k]), 5)] for k in range(TOPK)]

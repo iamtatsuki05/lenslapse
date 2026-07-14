@@ -7,7 +7,7 @@
 const SIGN = new URLSearchParams(location.search).get('__sign')
 
 /** Append the page's __sign token to a same-origin URL (absolute or relative). */
-export function signUrl(url) {
+export function signUrl(url: string): string {
   const u = new URL(url, location.href)
   if (!SIGN || u.origin !== location.origin || u.searchParams.has('__sign')) return u.href
   u.searchParams.set('__sign', SIGN)

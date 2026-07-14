@@ -16,6 +16,7 @@ import argparse
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import onnx
@@ -29,7 +30,7 @@ from .export_checkpoints import Backbone, build_lens_onnx
 from .precompute_lens import PROMPTS, lens_all
 
 
-def build_lens_onnx_f16(model, path):
+def build_lens_onnx_f16(model: Any, path: Path) -> None:
     """Lens head with fp16-stored weights cast to fp32 at run time (half the size, fp32 math).
 
     LayerNorm-only variant used for the quantization comparison (Pythia); the shipped f16w format
@@ -60,7 +61,7 @@ def build_lens_onnx_f16(model, path):
     onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)]), str(path))
 
 
-def export_fp32(model, td):
+def export_fp32(model: Any, td: Path) -> tuple[Path, Path]:
     tok_ids = torch.tensor([[1, 2, 3, 4]])
     mask = torch.ones_like(tok_ids)
     bb_path = Path(td) / "bb.onnx"
@@ -82,7 +83,7 @@ def export_fp32(model, td):
     return bb_path, lens_path
 
 
-def make_variants(model, bb_path, lens_path, td):
+def make_variants(model: Any, bb_path: Path, lens_path: Path, td: Path) -> dict[str, tuple[Path, Path]]:
     variants = {}
     q8pt_bb, q8pt_lens = Path(td) / "bb.q8pt.onnx", Path(td) / "lens.q8pt.onnx"
     quantize_dynamic(str(bb_path), str(q8pt_bb), weight_type=QuantType.QInt8)
@@ -108,7 +109,7 @@ def make_variants(model, bb_path, lens_path, td):
     return variants
 
 
-def eval_variant(bb_path, lens_path, prompts_enc, ref):
+def eval_variant(bb_path: Path, lens_path: Path, prompts_enc: Any, ref: Any) -> dict[str, Any]:
     sb = ort.InferenceSession(str(bb_path))
     sl = ort.InferenceSession(str(lens_path))
     agree_all, agree_final, kl_final, n_all, n_final = 0, 0, 0.0, 0, 0
@@ -154,8 +155,8 @@ def main() -> None:
             ref[i] = lens_all(model, torch.tensor([tok(p["text"])["input_ids"]])).numpy()
 
         with tempfile.TemporaryDirectory() as td:
-            bb_path, lens_path = export_fp32(model, td)
-            variants = {"fp32": (bb_path, lens_path), **make_variants(model, bb_path, lens_path, td)}
+            bb_path, lens_path = export_fp32(model, Path(td))
+            variants = {"fp32": (bb_path, lens_path), **make_variants(model, bb_path, lens_path, Path(td))}
             report["steps"][step] = {name: eval_variant(b, le, prompts_enc, ref) for name, (b, le) in variants.items()}
         del model
         print(f"[step{step}]", json.dumps(report["steps"][step], indent=1), flush=True)

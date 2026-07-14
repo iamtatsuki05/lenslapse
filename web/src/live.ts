@@ -4,15 +4,50 @@
 // One LiveEngine instance per model; the models root hosts one subdirectory per model id.
 
 import * as ort from 'onnxruntime-web/webgpu'
-import { signUrl } from './auth.js'
-import { getProbe, probeKey, putProbe } from './probeStore.js'
+import { signUrl } from './auth'
+import { getProbe, probeKey, putProbe } from './probeStore'
+import type { GridCell, GridData, TopEntry } from './data'
+import type { PreTrainedTokenizer } from '@huggingface/transformers'
+
+type StatusFn = (msg: string) => void
+
+/** One entry of the probe server's /models registry. */
+export interface ServerModel {
+  id: string
+  ref: string
+  mode: string
+  label?: string | null
+  steps: number[]
+  origin: string
+}
+
+/** Converted-checkpoint manifest served next to the ONNX files. */
+interface Manifest {
+  files?: [string, string]
+  steps: { step: number; backbone_bytes?: number; lens_bytes?: number }[]
+}
+
+interface SessionPair {
+  backbone: ort.InferenceSession
+  lens: ort.InferenceSession
+}
+
+/** Result of one probe (server or in-browser); also the shape persisted for replay. */
+export interface ProbeResult {
+  tokens: string[]
+  grid: GridData
+  timing: { total: number; forward: number; probe: number }
+  backend: string
+  serverCached?: boolean
+  replayed?: boolean
+}
 
 // Optional local probe server for models too heavy for the browser.
 // ?probe=<url> connects and is remembered (localStorage) so later visits need no parameter;
 // ?probe=off forgets it. A locally-served app additionally auto-detects the default port —
 // a closed local port refuses instantly, so this costs nothing when no server is running.
 // Public (non-localhost) deployments never probe the visitor's machine without explicit opt-in.
-function resolveProbeUrl() {
+export function resolveProbeUrl(): string | null {
   const param = new URLSearchParams(location.search).get('probe')
   if (param === 'off') {
     try {
@@ -42,7 +77,7 @@ function resolveProbeUrl() {
 const PROBE_URL = resolveProbeUrl()
 
 /** Origin of the configured probe server, or null when the app runs purely static. */
-export function probeServerOrigin() {
+export function probeServerOrigin(): string | null {
   try {
     return PROBE_URL ? new URL(PROBE_URL, location.href).origin : null
   } catch {
@@ -51,12 +86,12 @@ export function probeServerOrigin() {
 }
 
 /** Server model registry ([{id, ref, mode, label, steps, origin}]) or null if unreachable. */
-export async function fetchServerModels() {
+export async function fetchServerModels(): Promise<ServerModel[] | null> {
   if (!probeServerOrigin()) return null
   try {
     // hard timeout: a hanging request (e.g. a private-network preflight that never settles on
     // an HTTPS page) must degrade to "no server", never stall the caller — boot awaits this
-    const res = await fetch(new URL('/models', probeServerOrigin()), { signal: AbortSignal.timeout(4000) })
+    const res = await fetch(new URL('/models', probeServerOrigin()!), { signal: AbortSignal.timeout(4000) })
     return res.ok ? await res.json() : null
   } catch {
     return null
@@ -76,7 +111,7 @@ const HF_DEFAULT = 'https://huggingface.co/datasets/iamtatsuki05/lenslapse-onnx/
 const CACHE_NAME = 'lenslapse-models-v1'
 const MAX_SESSIONS = 2 // fp32-expanded weights are large (70m ≈ 280MB, 160m ≈ 650MB in memory)
 
-async function fetchManifest(root, modelId) {
+async function fetchManifest(root: string, modelId: string): Promise<Manifest | null> {
   try {
     const res = await fetch(signUrl(new URL(`${modelId}/manifest.json`, root).href), {
       signal: AbortSignal.timeout(8000),
@@ -87,12 +122,12 @@ async function fetchManifest(root, modelId) {
   }
 }
 
-async function resolveManifest(modelId) {
+async function resolveManifest(modelId: string): Promise<{ manifest: Manifest; baseUrl: string } | null> {
   // every model walks the full chain in priority order (explicit param > same-origin > Hub):
   // a locally converted model lives under the dev middleware while shipped suites live on the
   // Hub, and a remembered root must never outrank an explicit ?models= override
   const chain = [new URLSearchParams(location.search).get('models'), `${APP_BASE}models/`, HF_DEFAULT]
-  for (const base of chain.filter(Boolean)) {
+  for (const base of chain.filter(Boolean) as string[]) {
     const root = new URL(base, location.href).href
     const manifest = await fetchManifest(root, modelId)
     if (manifest) return { manifest, baseUrl: new URL(`${modelId}/`, root).href }
@@ -101,7 +136,20 @@ async function resolveManifest(modelId) {
 }
 
 export class LiveEngine {
-  constructor(modelId, hfName) {
+  // `declare`: type-only field declarations — the constructor (or a later method, for `server`
+  // and `loading`) assigns them, and emitting real class fields would change the compiled output.
+  declare modelId: string
+  declare hfName: string
+  declare manifest: Manifest | null
+  declare baseUrl: string | null
+  declare tokenizer: PreTrainedTokenizer | null
+  declare backend: 'webgpu' | 'wasm' | 'server' | null
+  declare sessions: Map<number, SessionPair>
+  declare available: boolean
+  declare server?: string
+  declare loading?: Map<number, Promise<SessionPair>>
+
+  constructor(modelId: string, hfName: string) {
     this.modelId = modelId
     this.hfName = hfName
     this.manifest = null
@@ -112,7 +160,7 @@ export class LiveEngine {
     this.available = false
   }
 
-  async init(onStatus) {
+  async init(onStatus?: StatusFn): Promise<boolean> {
     const serverOrigin = probeServerOrigin()
     if (serverOrigin) {
       try {
@@ -151,23 +199,23 @@ export class LiveEngine {
       this.tokenizer = await AutoTokenizer.from_pretrained(this.hfName)
     } catch (e) {
       // init must resolve, never reject: callers await it outside their try blocks
-      onStatus?.(`live probing unavailable (tokenizer failed to load: ${e.message}) — precomputed mode only`)
+      onStatus?.(`live probing unavailable (tokenizer failed to load: ${(e as Error).message}) — precomputed mode only`)
       return false
     }
     this.available = true
     return true
   }
 
-  liveSteps() {
+  liveSteps(): number[] {
     return this.manifest ? this.manifest.steps.map((s) => s.step) : []
   }
 
-  async fetchCached(url, onStatus, label) {
+  async fetchCached(url: string, onStatus?: StatusFn, label?: string): Promise<ArrayBuffer> {
     // The Cache API is best-effort: it can be unavailable (private browsing) or full (quota);
     // neither should break the probe — worst case is re-downloading next visit.
     // Cache entries are keyed on the unsigned URL: the __sign token rotates daily and must not
     // fragment the cache.
-    let cache = null
+    let cache: Cache | null = null
     try {
       cache = 'caches' in self ? await caches.open(CACHE_NAME) : null
       const hit = cache ? await cache.match(url) : null
@@ -190,11 +238,11 @@ export class LiveEngine {
     return buf
   }
 
-  async loadCheckpoint(step, onStatus) {
-    if (this.sessions.has(step)) return this.sessions.get(step)
+  async loadCheckpoint(step: number, onStatus?: StatusFn): Promise<SessionPair> {
+    if (this.sessions.has(step)) return this.sessions.get(step)!
     // in-flight guard: concurrent probes for the same step must share one load
     this.loading ??= new Map()
-    if (this.loading.has(step)) return await this.loading.get(step)
+    if (this.loading.has(step)) return await this.loading.get(step)!
     const p = this._loadCheckpoint(step, onStatus)
     this.loading.set(step, p)
     try {
@@ -204,12 +252,12 @@ export class LiveEngine {
     }
   }
 
-  async _loadCheckpoint(step, onStatus) {
+  async _loadCheckpoint(step: number, onStatus?: StatusFn): Promise<SessionPair> {
     const dir = `${this.baseUrl}step${step}/`
-    const [bbFile, lensFile] = this.manifest.files ?? ['backbone.f16.onnx', 'lens.f16.onnx']
-    const sizes = this.manifest.steps.find((s) => s.step === step)
-    const mb = (b) => (b ? `${Math.round(b / 1e6)}MB` : '')
-    const mk = async (name, bytes) => {
+    const [bbFile, lensFile] = this.manifest!.files ?? ['backbone.f16.onnx', 'lens.f16.onnx']
+    const sizes = this.manifest!.steps.find((s) => s.step === step)
+    const mb = (b?: number) => (b ? `${Math.round(b / 1e6)}MB` : '')
+    const mk = async (name: string, bytes?: number) => {
       const buf = await this.fetchCached(`${dir}${name}`, onStatus, `${this.modelId} step ${step} ${name} (${mb(bytes)})`)
       // recompute providers per file: a WebGPU failure on the first file must demote the second too
       const providers = this.backend === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm']
@@ -229,9 +277,9 @@ export class LiveEngine {
     const pair = { backbone, lens }
     this.sessions.set(step, pair)
     if (this.sessions.size > MAX_SESSIONS) {
-      const oldest = this.sessions.keys().next().value
+      const oldest = this.sessions.keys().next().value!
       if (oldest !== step) {
-        const old = this.sessions.get(oldest)
+        const old = this.sessions.get(oldest)!
         this.sessions.delete(oldest)
         try {
           await Promise.all([old.backbone.release(), old.lens.release()])
@@ -244,17 +292,17 @@ export class LiveEngine {
   }
 
   /** Single forward pass + lens over every (layer, position). Returns grid cells + timing. */
-  async probe(text, step, onStatus) {
+  async probe(text: string, step: number, onStatus?: StatusFn): Promise<ProbeResult> {
     // reproducibility: identical (model, step, prompt) replays the stored result
     const key = probeKey(this.modelId, step, text)
-    const saved = FRESH ? null : await getProbe(key)
+    const saved = FRESH ? null : await getProbe<ProbeResult>(key)
     if (saved) return { ...saved, replayed: true }
     const result = this.server ? await this.probeServer(text, step, onStatus) : await this.probeOnnx(text, step, onStatus)
     await putProbe(key, result)
     return result
   }
 
-  async probeServer(text, step, onStatus) {
+  async probeServer(text: string, step: number, onStatus?: StatusFn): Promise<ProbeResult> {
     onStatus?.(`probing on ${this.server}…`)
     const res = await fetch(new URL('/probe', this.server), {
       method: 'POST',
@@ -272,11 +320,11 @@ export class LiveEngine {
     }
   }
 
-  async probeOnnx(text, step, onStatus) {
+  async probeOnnx(text: string, step: number, onStatus?: StatusFn): Promise<ProbeResult> {
     const t0 = performance.now()
     const { backbone, lens } = await this.loadCheckpoint(step, onStatus)
-    const enc = this.tokenizer(text)
-    const ids = enc.input_ids.data // BigInt64Array
+    const enc = this.tokenizer!(text)
+    const ids = enc.input_ids.data as BigInt64Array // BigInt64Array
     const T = ids.length
     if (T === 0) throw new Error('empty prompt')
     if (T > 64) throw new Error('prompt too long (max 64 tokens for the live probe)')
@@ -288,18 +336,18 @@ export class LiveEngine {
     })
     const hs = out.hidden_states // [L+1, 1, T, H]
     const [L1, , , H] = hs.dims
-    const lensOut = await lens.run({ hidden: new ort.Tensor('float32', hs.data, [L1 * T, H]) })
+    const lensOut = await lens.run({ hidden: new ort.Tensor('float32', hs.data as Float32Array, [L1 * T, H]) })
     const logits = lensOut.logits // [N, V]
     const V = logits.dims[1]
     const t2 = performance.now()
 
-    const tokens = Array.from(ids, (id) => this.tokenizer.decode([Number(id)]))
-    const cells = []
+    const tokens = Array.from(ids, (id) => this.tokenizer!.decode([Number(id)]))
+    const cells: GridCell[][] = []
     for (let li = 0; li < L1; li++) {
-      const row = []
+      const row: GridCell[] = []
       for (let t = 0; t < T; t++) {
         const off = (li * T + t) * V
-        row.push(topkSoftmax(logits.data, off, V, 10, (id) => this.tokenizer.decode([id])))
+        row.push(topkSoftmax(logits.data as Float32Array, off, V, 10, (id) => this.tokenizer!.decode([id])))
       }
       cells.push(row)
     }
@@ -309,17 +357,23 @@ export class LiveEngine {
       grid: { layers: L1, positions: T, cells },
       // forward = backbone + lens sessions; probe additionally includes the JS softmax/top-10 pass
       timing: { total: t3 - t0, forward: t2 - t1, probe: t3 - t1 },
-      backend: this.backend,
+      backend: this.backend!,
     }
   }
 }
 
-function topkSoftmax(data, off, V, k, decode) {
+export function topkSoftmax(
+  data: Float32Array,
+  off: number,
+  V: number,
+  k: number,
+  decode: (id: number) => string
+): GridCell {
   let max = -Infinity
   for (let i = 0; i < V; i++) if (data[off + i] > max) max = data[off + i]
   let Z = 0
   for (let i = 0; i < V; i++) Z += Math.exp(data[off + i] - max)
-  const top = [] // [{id, logit}] ascending by logit, length <= k
+  const top: [number, number][] = [] // [{id, logit}] ascending by logit, length <= k
   for (let i = 0; i < V; i++) {
     const v = data[off + i]
     if (top.length < k) {
@@ -335,6 +389,6 @@ function topkSoftmax(data, off, V, k, decode) {
     }
   }
   top.sort((a, b) => b[1] - a[1])
-  const entries = top.map(([id, v]) => [decode(id), Math.exp(v - max) / Z, id])
+  const entries = top.map(([id, v]): TopEntry => [decode(id), Math.exp(v - max) / Z, id])
   return { token: entries[0][0], prob: entries[0][1], top: entries }
 }

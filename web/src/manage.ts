@@ -1,9 +1,10 @@
 // "Models" management dialog: register / remove probe-server models from the UI.
 // Only wired up when a probe server is configured (?probe=...); the static site never shows it.
 
-import { fetchServerModels, probeServerOrigin } from './live.js'
+import { fetchServerModels, probeServerOrigin } from './live'
+import type { ServerModel } from './live'
 
-const $ = (id) => document.getElementById(id)
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
 
 const DEFAULT_SUITE_STEPS = '0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000'
 
@@ -11,11 +12,11 @@ const DEFAULT_SUITE_STEPS = '0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,
  * Wires the ⚙ models button + dialog. `onChange(serverModels)` fires after every successful
  * add/remove with the fresh server registry so the caller can rebuild its catalog.
  */
-export function setupManageModels(onChange) {
+export function setupManageModels(onChange: (serverModels: ServerModel[] | null) => void): void {
   const origin = probeServerOrigin()
   if (!origin) return
   const btn = $('manage-models-btn')
-  const dialog = $('models-dialog')
+  const dialog = $<HTMLDialogElement>('models-dialog')
   btn.hidden = false
   btn.addEventListener('click', async () => {
     await renderList()
@@ -23,12 +24,12 @@ export function setupManageModels(onChange) {
   })
   $('models-close').addEventListener('click', () => dialog.close())
 
-  const refInput = $('am-ref')
-  const idInput = $('am-id')
+  const refInput = $<HTMLInputElement>('am-ref')
+  const idInput = $<HTMLInputElement>('am-id')
   const stepsRow = $('am-steps-row')
   const error = $('am-error')
 
-  const mode = () => document.querySelector('input[name="am-mode"]:checked').value
+  const mode = () => document.querySelector<HTMLInputElement>('input[name="am-mode"]:checked')!.value
   for (const radio of document.querySelectorAll('input[name="am-mode"]')) {
     radio.addEventListener('change', () => {
       stepsRow.hidden = mode() !== 'suite'
@@ -44,7 +45,7 @@ export function setupManageModels(onChange) {
         .replace(/^[^a-z0-9]+/, '') // ids must start alphanumeric
     }
     if (ref.startsWith('/') || ref.startsWith('./') || ref.startsWith('~')) {
-      document.querySelector('input[name="am-mode"][value="local"]').checked = true
+      document.querySelector<HTMLInputElement>('input[name="am-mode"][value="local"]')!.checked = true
       stepsRow.hidden = true
     }
   })
@@ -54,7 +55,7 @@ export function setupManageModels(onChange) {
 
   // native folder picker: the dialog opens on the machine running the probe server (the same
   // machine in the intended localhost setup), so nobody has to type an absolute path
-  const browse = $('am-browse')
+  const browse = $<HTMLButtonElement>('am-browse')
   browse.addEventListener('click', async () => {
     browse.disabled = true
     error.textContent = ''
@@ -72,10 +73,10 @@ export function setupManageModels(onChange) {
       refInput.dispatchEvent(new Event('input')) // prefills the id
       // the picker always returns a directory — select local mode explicitly (the ref-prefix
       // heuristic would miss Windows paths like C:\Users\...)
-      document.querySelector('input[name="am-mode"][value="local"]').checked = true
+      document.querySelector<HTMLInputElement>('input[name="am-mode"][value="local"]')!.checked = true
       stepsRow.hidden = true
     } catch (err) {
-      error.textContent = `folder dialog failed: ${err.message}`
+      error.textContent = `folder dialog failed: ${(err as Error).message}`
     } finally {
       browse.disabled = false
       browse.textContent = oldLabel
@@ -84,7 +85,7 @@ export function setupManageModels(onChange) {
 
   let listGen = 0 // bumped per render: poll chains from replaced (detached) rows must stop
 
-  async function renderList() {
+  async function renderList(): Promise<void> {
     const gen = ++listGen
     const list = $('server-model-list')
     const models = await fetchServerModels()
@@ -105,7 +106,7 @@ export function setupManageModels(onChange) {
         rm.addEventListener('click', async () => {
           rm.disabled = true
           try {
-            const res = await fetch(new URL(`/models/${encodeURIComponent(m.id)}`, origin), {
+            const res = await fetch(new URL(`/models/${encodeURIComponent(m.id)}`, origin!), {
               method: 'DELETE',
               signal: AbortSignal.timeout(10000),
             })
@@ -117,7 +118,7 @@ export function setupManageModels(onChange) {
             await renderList()
             onChange(await fetchServerModels())
           } catch (err) {
-            error.textContent = `probe server unreachable: ${err.message}`
+            error.textContent = `probe server unreachable: ${(err as Error).message}`
           } finally {
             rm.disabled = false
           }
@@ -129,7 +130,7 @@ export function setupManageModels(onChange) {
   }
 
   /** "convert to ONNX" button + status; resumes progress display if a job is already running. */
-  function convertButton(id, gen) {
+  function convertButton(id: string, gen: number): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'convert-wrap'
     const btn = document.createElement('button')
@@ -139,10 +140,10 @@ export function setupManageModels(onChange) {
     stat.className = 'hint'
     wrap.append(btn, stat)
 
-    const poll = async () => {
-      if (gen !== listGen || !$('models-dialog').open) return // row was re-rendered or dialog closed
+    const poll = async (): Promise<void> => {
+      if (gen !== listGen || !$<HTMLDialogElement>('models-dialog').open) return // row was re-rendered or dialog closed
       try {
-        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin), {
+        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin!), {
           signal: AbortSignal.timeout(10000),
         })
         if (res.status === 404) return // no job — leave the button idle
@@ -171,7 +172,7 @@ export function setupManageModels(onChange) {
       btn.disabled = true
       stat.textContent = 'starting…'
       try {
-        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin), {
+        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin!), {
           method: 'POST',
           signal: AbortSignal.timeout(10000),
         })
@@ -184,7 +185,7 @@ export function setupManageModels(onChange) {
         poll()
       } catch (err) {
         stat.textContent = ''
-        error.textContent = `probe server unreachable: ${err.message}`
+        error.textContent = `probe server unreachable: ${(err as Error).message}`
         btn.disabled = false
       }
     })
@@ -192,17 +193,17 @@ export function setupManageModels(onChange) {
     return wrap
   }
 
-  $('add-model-form').addEventListener('submit', async (e) => {
+  $<HTMLFormElement>('add-model-form').addEventListener('submit', async (e) => {
     e.preventDefault()
     error.textContent = ''
-    const body = {
+    const body: { id: string; ref: string; mode: string; label: string | null; steps?: number[] } = {
       id: idInput.value.trim(),
       ref: refInput.value.trim(),
       mode: mode(),
-      label: $('am-label').value.trim() || null,
+      label: $<HTMLInputElement>('am-label').value.trim() || null,
     }
     if (body.mode === 'suite') {
-      const parts = $('am-steps')
+      const parts = $<HTMLInputElement>('am-steps')
         .value.split(',')
         .map((s) => s.trim())
       // strict parse: Number('') is 0, so empty/garbage segments would silently become step 0
@@ -212,7 +213,7 @@ export function setupManageModels(onChange) {
       }
       body.steps = parts.map(Number)
     }
-    const submit = $('am-submit')
+    const submit = $<HTMLButtonElement>('am-submit')
     submit.disabled = true
     submit.textContent = 'validating…'
     try {
@@ -226,23 +227,23 @@ export function setupManageModels(onChange) {
         error.textContent = await errorDetail(res)
         return
       }
-      $('add-model-form').reset()
-      $('am-steps').value = DEFAULT_SUITE_STEPS
+      $<HTMLFormElement>('add-model-form').reset()
+      $<HTMLInputElement>('am-steps').value = DEFAULT_SUITE_STEPS
       delete idInput.dataset.touched
       stepsRow.hidden = true
       await renderList()
       onChange(await fetchServerModels())
     } catch (err) {
-      error.textContent = `probe server unreachable: ${err.message}`
+      error.textContent = `probe server unreachable: ${(err as Error).message}`
     } finally {
       submit.disabled = false
       submit.textContent = 'Add model'
     }
   })
-  $('am-steps').value = DEFAULT_SUITE_STEPS
+  $<HTMLInputElement>('am-steps').value = DEFAULT_SUITE_STEPS
 }
 
-async function errorDetail(res) {
+async function errorDetail(res: Response): Promise<string> {
   try {
     const detail = (await res.json()).detail
     return typeof detail === 'string' ? detail : JSON.stringify(detail)
@@ -251,6 +252,6 @@ async function errorDetail(res) {
   }
 }
 
-function escapeHtml(s) {
+function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

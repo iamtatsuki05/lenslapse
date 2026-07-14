@@ -77,5 +77,5 @@ def resolve(model: torch.nn.Module) -> ArchHandles:
         final_norm=final_norm,
         lm_head=lm_head,
         norm_type="rmsnorm" if is_rms else "layernorm",
-        eps=float(eps),
+        eps=float(eps if eps is not None else 1e-5),
     )

@@ -1,8 +1,10 @@
 // Small UI helpers: tooltip, slider ticks, badges, gallery cards.
 
-import { displayToken } from './grid.js'
+import { displayToken } from './grid'
+import type { CellInfo } from './grid'
+import type { Prompt } from './data'
 
-export function showTooltip(el, cellInfo, evt, tokens) {
+export function showTooltip(el: HTMLElement, cellInfo: CellInfo, evt: MouseEvent, tokens: string[]): void {
   const { layer, pos, cell } = cellInfo
   const rows = cell.top
     .map(
@@ -25,11 +27,11 @@ export function showTooltip(el, cellInfo, evt, tokens) {
   el.style.top = `${y}px`
 }
 
-export function hideTooltip(el) {
+export function hideTooltip(el: HTMLElement): void {
   el.hidden = true
 }
 
-export function buildSliderTicks(container, steps, liveSteps, maxStep) {
+export function buildSliderTicks(container: HTMLElement, steps: number[], liveSteps: number[], maxStep: number): void {
   container.replaceChildren()
   const live = new Set(liveSteps)
   const xmax = Math.log10(maxStep + 1)
@@ -42,8 +44,8 @@ export function buildSliderTicks(container, steps, liveSteps, maxStep) {
   }
 }
 
-export function setBadge(el, mode) {
-  const labels = {
+export function setBadge(el: HTMLElement, mode: string): void {
+  const labels: Record<string, [string, string]> = {
     precomputed: ['precomputed', ''],
     wasm: ['live · WASM', ''],
     webgpu: ['live · WebGPU', ''],
@@ -55,7 +57,16 @@ export function setBadge(el, mode) {
   el.className = `chip badge ${cls}`.trim()
 }
 
-const STORY_CARDS = [
+export interface StoryCard {
+  tag: string
+  title: string
+  desc: string
+  match: (p: Prompt) => boolean
+  pin: string
+  step: number
+}
+
+const STORY_CARDS: StoryCard[] = [
   {
     tag: 'fact acquisition',
     title: 'When does the model learn “Tokyo”?',
@@ -82,7 +93,11 @@ const STORY_CARDS = [
   },
 ]
 
-export function buildGallery(container, prompts, onSelect) {
+export function buildGallery(
+  container: HTMLElement,
+  prompts: Prompt[],
+  onSelect: (p: Prompt, card: StoryCard) => void | Promise<void>
+): void {
   container.replaceChildren()
   for (const card of STORY_CARDS) {
     const p = prompts.find(card.match)
@@ -95,6 +110,6 @@ export function buildGallery(container, prompts, onSelect) {
   }
 }
 
-function escapeHtml(s) {
+export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
