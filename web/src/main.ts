@@ -11,7 +11,7 @@ import {
   nearestStep,
   trajectoryFromShard,
 } from './data'
-import { LensGrid } from './grid'
+import { LensGrid, cellKey } from './grid'
 import { LiveEngine, fetchServerModels, probeServerOrigin } from './live'
 import { setupManageModels } from './manage'
 import { renderRace } from './race'
@@ -29,7 +29,18 @@ import {
   showTooltip,
 } from './ui'
 import { legendGradient } from './color'
-import type { DiffMap, ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry, TrajectorySeries } from './data'
+import type {
+  DiffMap,
+  GridDims,
+  GridView,
+  ModelCatalog,
+  ModelEntry,
+  ModelIndex,
+  Prompt,
+  TokenRef,
+  TopEntry,
+  TrajectorySeries,
+} from './data'
 import type { PinnedCell } from './grid'
 import type { ProbeResult, ServerModel } from './live'
 import type { StoryCard } from './ui'
@@ -45,18 +56,18 @@ const state = {
   liveText: '',
   stepIdx: 0,
   pinned: null as PinnedCell | null, // {layer, pos}
-  gridView: 'top1' as 'top1' | 'acq' | 'diff', // acq = acquisition map; diff = change vs a reference step
+  gridView: 'top1' as GridView, // acq = acquisition map; diff = change vs a reference step
   diffRef: null as number | null, // the frozen reference checkpoint for the diff view
   logColor: false, // color cells by log10(p) — reveals early-training structure
   compareId: null as string | null, // second model rendered in lockstep under the main grid
-  extraTargets: [] as { id: number; token: string }[], // user-tracked tokens added to traces
+  extraTargets: [] as TokenRef[], // user-tracked tokens added to traces
   steps: [] as number[],
   liveResult: null as LiveResult | null, // cached last live probe {text, step, grid, tokens}
   // trajectory sweep over every checkpoint for the current live prompt
   liveSweep: null as null | {
     text: string
     pos: number // the position whose final-layer top-3 fixed the targets
-    targets: { id: number; token: string }[]
+    targets: TokenRef[]
     byStep: Map<number, ProbeResult>
   },
 }
@@ -130,13 +141,49 @@ const grid = new LensGrid($<HTMLCanvasElement>('lens-canvas'), {
   },
 })
 
+/** A snapshot of one grid's top-1 ids, kept just long enough to detect what changed since the
+ * previous render of the same (model, prompt). */
+interface Top1Snapshot {
+  key: string
+  ids: number[][]
+}
+
 // change-flash bookkeeping: the previous step's top-1 ids, valid only for the same (model, prompt)
-let prevTop1: { key: string; ids: number[][] } | null = null
-let prevTop1B: { key: string; ids: number[][] } | null = null // same, for the compared model
+let prevTop1: Top1Snapshot | null = null
+let prevTop1B: Top1Snapshot | null = null // same, for the compared model
 // data backing the acquisition-map tooltips
 let acqView: { steps: number[]; firstIdx: number[][] } | null = null
 // data backing the diff-view tooltips
 let diffView: DiffMap | null = null
+
+/** Flash the cells whose top-1 id changed vs `prev`, then return the new snapshot — callers
+ * reassign their own prevTop1/prevTop1B. A no-op (but still returns the fresh snapshot) the
+ * first time a (model, prompt) is seen, or after any dimension change. */
+function flashTop1Changes(target: LensGrid, prev: Top1Snapshot | null, key: string, ids: number[][]): Top1Snapshot {
+  if (prev && prev.key === key && prev.ids.length === ids.length) {
+    const changed = new Set<string>()
+    for (let li = 0; li < ids.length; li++)
+      for (let t = 0; t < ids[li].length; t++)
+        if (prev.ids[li]?.[t] !== undefined && prev.ids[li][t] !== ids[li][t]) changed.add(cellKey(li, t))
+    target.flashCells(changed)
+  }
+  return { key, ids }
+}
+
+/** Pin a cell on both the state and the grid's own mirror — the shape every non-click pin
+ * assignment needs (a user click instead pins the grid first, which then notifies state). */
+function setPinned(cell: PinnedCell | null): void {
+  state.pinned = cell
+  grid.pinned = cell ? { ...cell } : null
+}
+
+/** Drop the pin when the active view's dimensions no longer contain it (a shorter grid after
+ * switching model, prompt, or view). */
+function clampPinnedToDims(dims: GridDims): void {
+  if (state.pinned && (state.pinned.layer >= dims.layers || state.pinned.pos >= dims.positions)) {
+    setPinned(null)
+  }
+}
 
 // second grid for compare mode: hover works, pinning stays on the primary grid
 const compareGrid = new LensGrid($<HTMLCanvasElement>('compare-canvas'), {
@@ -187,14 +234,7 @@ async function refreshCompare(): Promise<void> {
     const key = `${cmpId}:${prompt.id}`
     const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
     compareGrid.setData(g, prompt.tokens, null)
-    if (prevTop1B && prevTop1B.key === key && prevTop1B.ids.length === ids.length) {
-      const changed = new Set<string>()
-      for (let li = 0; li < ids.length; li++)
-        for (let t = 0; t < ids[li].length; t++)
-          if (prevTop1B.ids[li]?.[t] !== undefined && prevTop1B.ids[li][t] !== ids[li][t]) changed.add(`${li}:${t}`)
-      compareGrid.flashCells(changed)
-    }
-    prevTop1B = { key, ids }
+    prevTop1B = flashTop1Changes(compareGrid, prevTop1B, key, ids)
   } catch (e) {
     if (gen === viewGen) {
       wrap.hidden = true
@@ -226,14 +266,11 @@ async function refreshGrid(): Promise<void> {
     const cells = d.curTop.map((row, li) =>
       row.map((cur, t) => ({ token: cur[0], prob: d.change[li][t], top: [cur] }))
     )
-    if (state.pinned && (state.pinned.layer >= d.layers || state.pinned.pos >= d.positions)) {
-      state.pinned = null
-      grid.pinned = null
-    }
+    clampPinnedToDims(d)
     grid.logScale = false // the color IS the change fraction, not a probability
     grid.setData({ layers: d.layers, positions: d.positions, cells }, currentPrompt().tokens, state.pinned)
     const flippedSet = new Set<string>()
-    d.flipped.forEach((row, li) => row.forEach((f, t) => f && flippedSet.add(`${li}:${t}`)))
+    d.flipped.forEach((row, li) => row.forEach((f, t) => f && flippedSet.add(cellKey(li, t))))
     grid.setMarks(flippedSet)
     $('compare-wrap').hidden = true
     updateRace()
@@ -251,10 +288,7 @@ async function refreshGrid(): Promise<void> {
         top: [acq.finalTop[li][t]],
       }))
     )
-    if (state.pinned && (state.pinned.layer >= acq.layers || state.pinned.pos >= acq.positions)) {
-      state.pinned = null
-      grid.pinned = null
-    }
+    clampPinnedToDims(acq)
     grid.logScale = false // ordinal acquisition colors, not probabilities
     grid.setData({ layers: acq.layers, positions: acq.positions, cells }, currentPrompt().tokens, state.pinned)
     $('compare-wrap').hidden = true
@@ -263,23 +297,13 @@ async function refreshGrid(): Promise<void> {
   }
   const g = gridFromShard(shard, currentStep())
   if (!g) return
-  if (state.pinned && (state.pinned.layer >= g.layers || state.pinned.pos >= g.positions)) {
-    state.pinned = null
-    grid.pinned = null
-  }
+  clampPinnedToDims(g)
   const key = `${state.model}:${state.promptId}`
   const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
   grid.logScale = state.logColor
   grid.setData(g, currentPrompt().tokens, state.pinned)
   refreshCompare()
-  if (prevTop1 && prevTop1.key === key && prevTop1.ids.length === ids.length) {
-    const changed = new Set<string>()
-    for (let li = 0; li < ids.length; li++)
-      for (let t = 0; t < ids[li].length; t++)
-        if (prevTop1.ids[li]?.[t] !== undefined && prevTop1.ids[li][t] !== ids[li][t]) changed.add(`${li}:${t}`)
-    grid.flashCells(changed)
-  }
-  prevTop1 = { key, ids }
+  prevTop1 = flashTop1Changes(grid, prevTop1, key, ids)
   updateRace()
 }
 
@@ -491,8 +515,7 @@ function randomView(): void {
   $<HTMLSelectElement>('prompt-select').value = String(prompt.id)
   state.stepIdx = Math.floor(Math.random() * state.steps.length)
   $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
-  state.pinned = { layer: Math.max(1, Math.floor(Math.random() * gridLayers())), pos: prompt.tokens.length - 1 }
-  grid.pinned = { ...state.pinned }
+  setPinned({ layer: Math.max(1, Math.floor(Math.random() * gridLayers())), pos: prompt.tokens.length - 1 })
   refreshBadgeAndTicks()
   refreshStepUI()
   syncHash()
@@ -518,7 +541,7 @@ function rebuildCompareSelect(): void {
   sel.value = state.compareId ?? ''
 }
 
-function setGridView(view: 'top1' | 'acq' | 'diff'): void {
+function setGridView(view: GridView): void {
   state.gridView = view
   if (view !== 'diff') state.diffRef = null
   const acqBtn = $<HTMLButtonElement>('acq-toggle')
@@ -600,9 +623,7 @@ async function runLiveProbe(text: string): Promise<void> {
     }
     state.liveText = text
     state.liveResult = { ...res, text, step }
-    if (state.pinned && (state.pinned.layer >= res.grid.layers || state.pinned.pos >= res.grid.positions)) {
-      state.pinned = null
-    }
+    clampPinnedToDims(res.grid)
     setBadge($('backend-badge'), res.backend)
     const where = res.backend === 'server' ? 'on the local probe server' : 'fully in your browser'
     const note = res.replayed ? ' · replayed from saved probe' : res.serverCached ? ' · from server cache' : ''
@@ -637,13 +658,12 @@ async function runSweep(): Promise<void> {
   const text = state.liveText
   const steps = sweepableSteps()
   if (!text || steps.length < 2 || !state.liveResult) return
+  // default to the classic lens cell (deepest layer, last position) if nothing is pinned yet
+  const pin = state.pinned ?? { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
   if (!state.pinned) {
-    // default to the classic lens cell: deepest layer, last position
-    state.pinned = { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
-    grid.pinned = { ...state.pinned }
+    setPinned(pin)
     refreshGrid()
   }
-  const pin = state.pinned
   const btn = $<HTMLButtonElement>('traj-sweep')
   btn.disabled = true
   try {
@@ -690,8 +710,7 @@ async function applyStory(card: StoryCard): Promise<void> {
     refreshStepUI()
     await runLiveProbe(card.text)
     if (card.pin === 'lastLayerLastPos' && state.liveResult?.text === card.text) {
-      state.pinned = { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
-      grid.pinned = { ...state.pinned }
+      setPinned({ layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 })
       refreshGrid()
       refreshTrajectory()
     }
@@ -702,8 +721,7 @@ async function applyStory(card: StoryCard): Promise<void> {
   state.mode = 'pre'
   state.promptId = p.id
   $<HTMLSelectElement>('prompt-select').value = String(p.id)
-  state.pinned = card.pin === 'lastLayerLastPos' ? { layer: gridLayers() - 1, pos: p.tokens.length - 1 } : null
-  grid.pinned = state.pinned ? { ...state.pinned } : null
+  setPinned(card.pin === 'lastLayerLastPos' ? { layer: gridLayers() - 1, pos: p.tokens.length - 1 } : null)
   refreshBadgeAndTicks()
   refreshStepUI()
   syncHash()
@@ -875,8 +893,7 @@ async function switchModel(id: string): Promise<void> {
   state.mode = index.prompts.length ? 'pre' : 'live'
   state.promptId = Math.max(0, Math.min(state.promptId, index.prompts.length - 1))
   state.stepIdx = Math.min(state.stepIdx, state.steps.length - 1)
-  state.pinned = null
-  grid.pinned = null
+  setPinned(null)
   state.liveResult = null
   state.liveSweep = null // another model's trajectory must never render as this one's
   state.liveText = ''
@@ -987,8 +1004,7 @@ async function boot(): Promise<void> {
     state.mode = 'pre'
     state.promptId = Number(sel.value)
     state.extraTargets = []
-    state.pinned = null
-    grid.pinned = null
+    setPinned(null)
     refreshBadgeAndTicks()
     status('')
     syncHash()
@@ -1156,8 +1172,7 @@ async function boot(): Promise<void> {
   // classic cell so the trajectory panel is never an empty box, and play the time-lapse once
   // for first-time visitors — the product IS the motion, so show it without asking
   if (!deepLinked && state.mode === 'pre' && index.prompts.length && grid.grid) {
-    state.pinned = { layer: grid.grid.layers - 1, pos: currentPrompt().tokens.length - 1 }
-    grid.pinned = { ...state.pinned }
+    setPinned({ layer: grid.grid.layers - 1, pos: currentPrompt().tokens.length - 1 })
     grid.render()
     await refreshTrajectory()
     updateRace()

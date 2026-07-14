@@ -2,6 +2,7 @@
 // Only wired up when a probe server is configured (?probe=...); the static site never shows it.
 
 import { fetchServerModels, probeServerOrigin } from './live'
+import { escapeHtml } from './ui'
 import type { ServerModel } from './live'
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -251,8 +252,4 @@ async function errorDetail(res: Response): Promise<string> {
   } catch {
     return `HTTP ${res.status}`
   }
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }

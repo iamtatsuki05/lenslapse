@@ -39,7 +39,7 @@ import webbrowser
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 import torch
 import uvicorn
@@ -51,7 +51,7 @@ from pydantic import BaseModel, ValidationError
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .precompute_lens import lens_all
-from .sources import CheckpointSource, resolve_sources
+from .sources import DTYPE_CHOICES, MODE_CHOICES, CheckpointSource, DType, Mode, resolve_sources
 
 TOPK = 10
 MAX_TOKENS = 64
@@ -94,14 +94,72 @@ async def allow_private_network(request: Request, call_next: Callable[[Request],
     return response
 
 
-STATE: dict = {
-    "registry": {},
-    "cache_dir": None,
-    "max_loaded": 1,
-    "device_map": False,
-    "registry_file": None,
-    "dtype": "float32",
-}
+class ServerState(TypedDict, total=False):
+    """Global server config + mutable registry. `total=False`: main() and LocalBackend
+    (client.py) each finish populating this before any endpoint can be reached, so every key
+    below is filled in by the time it is read — but neither startup path sets literally all of
+    them (LocalBackend never sets models_root, only main() does), so none are `Required`."""
+
+    registry: dict[str, "RegistryEntry"]
+    cache_dir: Path
+    max_loaded: int
+    device_map: bool
+    registry_file: Path
+    dtype: DType
+    models_root: Path
+
+
+STATE: ServerState = {"registry": {}, "max_loaded": 1, "device_map": False, "dtype": "float32"}
+
+
+# JSON response shapes for the flat endpoints (mypy-checked, zero runtime effect: FastAPI
+# serializes the plain dict returned at runtime regardless of the annotation). /probe's response
+# is deliberately excluded — it is assembled from tensor data through several layers of nested
+# comprehensions, and forcing that shape into a TypedDict would trade a large, risky rewrite for
+# marginal benefit; dict[str, Any] stays accurate there.
+class HealthResponse(TypedDict):
+    ok: bool
+    models: list[str]
+    device: str
+
+
+class PickFolderResponse(TypedDict):
+    path: str
+
+
+class ModelListEntry(TypedDict):
+    id: str
+    ref: str
+    mode: Mode
+    label: str
+    steps: list[int]
+    origin: Literal["catalog", "user"]
+
+
+class RegisterResponse(TypedDict):
+    id: str
+    ref: str
+    mode: Mode
+    label: NotRequired[str]  # entry.model_dump(exclude_none=True) drops it when unset
+    steps: list[int]  # always present: overwritten unconditionally by model_steps(entry)
+
+
+class RemoveResponse(TypedDict):
+    removed: str
+
+
+class ConvertStatusResponse(TypedDict):
+    id: str
+    status: str
+    log: NotRequired[list[str]]
+    note: NotRequired[str]
+
+
+class TokenizeResponse(TypedDict):
+    ids: list[int]
+    tokens: list[str]
+
+
 LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
 TOKENIZERS: OrderedDict = OrderedDict()  # (ref, revision) -> tokenizer only (cheap; for /tokenize)
 # FastAPI runs sync endpoints in a threadpool; lens_all installs forward hooks on the shared
@@ -140,7 +198,7 @@ class RegistryEntry(BaseModel):
     """One probeable model. Serialized (minus origin) to the registry file."""
 
     ref: str
-    mode: Literal["suite", "final", "local"]
+    mode: Mode
     label: str | None = None
     steps: list[int] | None = None  # suite only
     origin: Literal["catalog", "user"] = "user"
@@ -173,7 +231,7 @@ def build_registry(
         mid, sep, ref = e.partition("=")
         if not sep or not mid or not ref:
             raise SystemExit(f"--extra expects id=hf_ref[:final] or id=/local/dir, got {e!r}")
-        mode: Literal["suite", "final", "local"] = "suite"
+        mode: Mode = "suite"
         if ref.endswith(":final"):
             ref, mode = ref[: -len(":final")], "final"
         elif Path(ref).is_dir():
@@ -262,7 +320,7 @@ def load(src: CheckpointSource) -> tuple[Any, Any]:
 
 
 @app.get("/health")
-def health() -> dict[str, Any]:
+def health() -> HealthResponse:
     return {"ok": True, "models": sorted(STATE["registry"]), "device": pick_device()}
 
 
@@ -283,7 +341,7 @@ def _folder_dialog_cmd() -> list[str] | None:
 
 
 @app.get("/pick-folder")
-def pick_folder() -> dict[str, str]:
+def pick_folder() -> PickFolderResponse:
     """Open a native folder dialog on the server machine and return the chosen absolute path.
 
     Lets the dialog's "browse" button fill in local checkpoint paths for people who do not
@@ -316,7 +374,7 @@ def pick_folder() -> dict[str, str]:
 
 
 @app.get("/models")
-def list_models() -> list[dict[str, Any]]:
+def list_models() -> list[ModelListEntry]:
     return [
         {
             "id": mid,
@@ -350,10 +408,10 @@ def validate_source(req: RegisterRequest) -> None:
 
 
 @app.post("/models", status_code=201)
-def register_model(req: RegisterRequest) -> dict[str, Any]:
+def register_model(req: RegisterRequest) -> RegisterResponse:
     if not MODEL_ID_RE.fullmatch(req.id):
         raise HTTPException(400, "id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-    if req.mode not in ("suite", "final", "local"):
+    if req.mode not in MODE_CHOICES:
         raise HTTPException(400, f"unknown mode {req.mode!r} (expected suite, final, or local)")
     if req.steps is not None and req.mode != "suite":
         raise HTTPException(400, f"steps only applies to suite mode, not {req.mode!r}")
@@ -369,7 +427,7 @@ def register_model(req: RegisterRequest) -> dict[str, Any]:
             raise HTTPException(409, f"model id {req.id!r} is already registered; remove it first")
         entry = RegistryEntry(
             ref=req.ref,
-            mode=req.mode,  # type: ignore[arg-type]  # validated to the Literal above
+            mode=req.mode,  # validated against MODE_CHOICES above
             label=req.label,
             steps=sorted(set(req.steps)) if req.mode == "suite" and req.steps else None,
         )
@@ -380,11 +438,14 @@ def register_model(req: RegisterRequest) -> dict[str, Any]:
             del STATE["registry"][req.id]  # keep memory and registry.json consistent
             raise HTTPException(500, f"could not persist registry: {e}") from e
     print(f"registered {req.id} -> {req.ref} ({req.mode})", flush=True)
-    return {"id": req.id, **entry.model_dump(exclude={"origin"}, exclude_none=True), "steps": model_steps(entry)}
+    result: RegisterResponse = {"id": req.id, "ref": entry.ref, "mode": entry.mode, "steps": model_steps(entry)}
+    if entry.label is not None:
+        result["label"] = entry.label
+    return result
 
 
 @app.delete("/models/{model_id}")
-def unregister_model(model_id: str) -> dict[str, str]:
+def unregister_model(model_id: str) -> RemoveResponse:
     with JOBS_LOCK:
         job = JOBS.get(model_id)
         if job and job["status"] == "running":
@@ -408,7 +469,7 @@ def unregister_model(model_id: str) -> dict[str, str]:
 
 
 @app.post("/models/{model_id}/convert", status_code=202)
-def convert_model(model_id: str) -> dict[str, str]:
+def convert_model(model_id: str) -> ConvertStatusResponse:
     """Run the full ONNX onboarding pipeline (add_model.py) for a registered model, in the
     background. On success the model graduates into web/public + models.json (browser-runnable
     after the app is rebuilt or served from source), and its dialog registration is retired."""
@@ -481,12 +542,12 @@ def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
 
 
 @app.get("/models/{model_id}/convert")
-def convert_status(model_id: str) -> dict[str, Any]:
+def convert_status(model_id: str) -> ConvertStatusResponse:
     with JOBS_LOCK:
         job = JOBS.get(model_id)
         if job is None:
             raise HTTPException(404, f"no conversion job for {model_id!r}")
-        result = {"id": model_id, "status": job["status"], "log": list(job["log"])[-8:]}
+        result: ConvertStatusResponse = {"id": model_id, "status": job["status"], "log": list(job["log"])[-8:]}
         if job["status"] == "done" and not _IN_REPO:
             result["note"] = (
                 f"exported — upload {STATE['models_root'] / model_id} to your model host to use it in-browser"
@@ -495,7 +556,7 @@ def convert_status(model_id: str) -> dict[str, Any]:
 
 
 @app.post("/tokenize")
-def tokenize(req: TokenizeRequest) -> dict[str, Any]:
+def tokenize(req: TokenizeRequest) -> TokenizeResponse:
     """Tokenize with a registered model's own tokenizer — the app's track-a-token feature needs
     ids for server-backed models, whose tokenizers never ship to the browser."""
     if len(req.text) > 2000:
@@ -673,7 +734,7 @@ def main() -> None:
     ap.add_argument("--max-loaded", type=int, default=1, help="models kept in memory (heavy models: keep 1)")
     ap.add_argument(
         "--dtype",
-        choices=["float32", "float16", "bfloat16", "auto"],
+        choices=DTYPE_CHOICES,
         default="float32",
         help="compute dtype; float32 (default) matches the precomputed shards and the browser path, "
         "lower precisions halve memory for heavy models but can flip late-checkpoint top-1s",

@@ -24,6 +24,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
+# sources.py has no torch/fastapi import — cheap to import eagerly even in pure-HTTP mode,
+# unlike `server`, which LocalBackend only imports lazily (see its __init__).
+from .sources import DTYPE_CHOICES, MODE_CHOICES, DType, Mode
+
 DEFAULT_SERVER = "http://localhost:8017"
 _T = TypeVar("_T")
 
@@ -116,7 +120,7 @@ class LocalBackend:
 
     where = "in-process"
 
-    def __init__(self, device_map: bool = False, dtype: str = "float32") -> None:
+    def __init__(self, device_map: bool = False, dtype: DType = "float32") -> None:
         from . import server  # deferred: imports torch, which HTTP mode must not pay for
 
         self._server = server
@@ -143,13 +147,15 @@ class LocalBackend:
         return self._call(self._server.probe, req)
 
     def models(self) -> list[dict[str, Any]]:
-        return self._server.list_models()
+        # server.py types this response richly (ModelListEntry) for its own callers; this CLI
+        # boundary deliberately treats it as a generic JSON payload, same as HttpBackend
+        return [dict(m) for m in self._server.list_models()]
 
     def add(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._call(self._server.register_model, self._server.RegisterRequest(**payload))
+        return dict(self._call(self._server.register_model, self._server.RegisterRequest(**payload)))
 
     def remove(self, model_id: str) -> dict[str, Any]:
-        return self._call(self._server.unregister_model, model_id)
+        return dict(self._call(self._server.unregister_model, model_id))
 
     def convert_start(self, model_id: str) -> dict[str, Any]:
         entry = self._server.STATE["registry"].get(model_id)
@@ -195,7 +201,7 @@ def parse_targets(spec: str | None) -> list[int] | None:
     return deduped
 
 
-def infer_mode(ref: str, steps: str | None) -> str:
+def infer_mode(ref: str, steps: str | None) -> Mode:
     """Mirror the registration dialog's radio buttons without making the user pick one."""
     if Path(ref).expanduser().is_dir():
         return "local"
@@ -371,7 +377,7 @@ def main() -> None:
     conn.add_argument("--device-map", action="store_true", help="in-process only: load with device_map='auto'")
     conn.add_argument(
         "--dtype",
-        choices=["float32", "float16", "bfloat16", "auto"],
+        choices=DTYPE_CHOICES,
         default="float32",
         help="in-process only: compute dtype (float32 matches the shards; lower halves memory)",
     )
@@ -410,7 +416,7 @@ def main() -> None:
     ma.add_argument("--label", default=None)
     ma.add_argument(
         "--mode",
-        choices=["suite", "final", "local"],
+        choices=MODE_CHOICES,
         default=None,
         help="default: local if --ref is a directory, suite if --steps is given, else final",
     )

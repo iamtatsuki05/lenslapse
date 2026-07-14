@@ -11,6 +11,16 @@ Three source shapes are supported:
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+# Shared across server.py (registry/argparse) and client.py (argparse) — defined here, not in
+# server.py, because this module has no torch/fastapi import: client.py's HTTP-only path must
+# stay able to import these without paying for the heavy deps server.py pulls in.
+Mode = Literal["suite", "final", "local"]
+MODE_CHOICES: tuple[Mode, ...] = ("suite", "final", "local")
+
+DType = Literal["float32", "float16", "bfloat16", "auto"]
+DTYPE_CHOICES: tuple[DType, ...] = ("float32", "float16", "bfloat16", "auto")
 
 
 @dataclass

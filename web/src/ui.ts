@@ -4,19 +4,14 @@ import { displayToken } from './grid'
 import type { CellInfo } from './grid'
 import type { Prompt } from './data'
 
-export function showTooltip(el: HTMLElement, cellInfo: CellInfo, evt: MouseEvent, tokens: string[]): void {
-  const { layer, pos, cell } = cellInfo
-  const maxP = cell.top[0]?.[1] || 1
-  const rows = cell.top
-    .map(
-      ([tok, p]) =>
-        `<tr><td>${escapeHtml(displayToken(tok))}</td><td>${(p * 100).toFixed(p >= 0.1 ? 1 : 2)}%</td>` +
-        `<td class="tt-bar"><i style="width:${Math.max(2, (p / maxP) * 100)}%"></i></td></tr>`
-    )
-    .join('')
-  el.innerHTML = `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(
-    displayToken(tokens[pos] ?? '')
-  )}”</div><table>${rows}</table>`
+/** The head line every tooltip variant shares: which layer, after which token. */
+function tooltipHead(layer: number, token: string): string {
+  return `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(displayToken(token))}”</div>`
+}
+
+/** Place a tooltip at the pointer, clamped to stay fully inside the viewport. Must run after
+ * `el.innerHTML` is set (it reads offsetWidth/Height, which depend on the current content). */
+function positionTooltip(el: HTMLElement, evt: MouseEvent): void {
   el.hidden = false
   const pad = 12
   const w = el.offsetWidth
@@ -27,6 +22,20 @@ export function showTooltip(el: HTMLElement, cellInfo: CellInfo, evt: MouseEvent
   if (y + h > innerHeight - 4) y = evt.clientY - h - pad
   el.style.left = `${x}px`
   el.style.top = `${y}px`
+}
+
+export function showTooltip(el: HTMLElement, cellInfo: CellInfo, evt: MouseEvent, tokens: string[]): void {
+  const { layer, pos, cell } = cellInfo
+  const maxP = cell.top[0]?.[1] || 1
+  const rows = cell.top
+    .map(
+      ([tok, p]) =>
+        `<tr><td>${escapeHtml(displayToken(tok))}</td><td>${(p * 100).toFixed(p >= 0.1 ? 1 : 2)}%</td>` +
+        `<td class="tt-bar"><i style="width:${Math.max(2, (p / maxP) * 100)}%"></i></td></tr>`
+    )
+    .join('')
+  el.innerHTML = `${tooltipHead(layer, tokens[pos] ?? '')}<table>${rows}</table>`
+  positionTooltip(el, evt)
 }
 
 export function hideTooltip(el: HTMLElement): void {
@@ -44,20 +53,11 @@ export function showDiffTooltip(
   const { layer, pos } = cellInfo
   const row = (label: string, [tok, p]: [string, number, number]) =>
     `<tr><td>${label}</td><td>${escapeHtml(displayToken(tok))}</td><td>${(p * 100).toFixed(1)}%</td></tr>`
-  el.innerHTML = `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(
-    displayToken(tokens[pos] ?? '')
-  )}”</div><table>${row(`step ${diff.refStep.toLocaleString()}`, diff.ref)}${row(
+  el.innerHTML = `${tooltipHead(layer, tokens[pos] ?? '')}<table>${row(`step ${diff.refStep.toLocaleString()}`, diff.ref)}${row(
     `step ${diff.curStep.toLocaleString()}`,
     diff.cur
   )}<tr><td>top-10 turnover</td><td colspan="2">${(diff.change * 100).toFixed(0)}%</td></tr></table>`
-  el.hidden = false
-  const pad = 12
-  let x = evt.clientX + pad
-  let y = evt.clientY + pad
-  if (x + el.offsetWidth > innerWidth - 4) x = evt.clientX - el.offsetWidth - pad
-  if (y + el.offsetHeight > innerHeight - 4) y = evt.clientY - el.offsetHeight - pad
-  el.style.left = `${x}px`
-  el.style.top = `${y}px`
+  positionTooltip(el, evt)
 }
 
 /** Tooltip for the acquisition-map view: the cell's final answer and when it first became top-1. */
@@ -70,17 +70,8 @@ export function showAcqTooltip(
 ): void {
   const { layer, pos, cell } = cellInfo
   const [tok, p] = cell.top[0]
-  el.innerHTML = `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(
-    displayToken(tokens[pos] ?? '')
-  )}”</div><table><tr><td>final top-1</td><td>${escapeHtml(displayToken(tok))} (${(p * 100).toFixed(1)}%)</td></tr><tr><td>first top-1 at</td><td>step ${firstStep.toLocaleString()}</td></tr></table>`
-  el.hidden = false
-  const pad = 12
-  let x = evt.clientX + pad
-  let y = evt.clientY + pad
-  if (x + el.offsetWidth > innerWidth - 4) x = evt.clientX - el.offsetWidth - pad
-  if (y + el.offsetHeight > innerHeight - 4) y = evt.clientY - el.offsetHeight - pad
-  el.style.left = `${x}px`
-  el.style.top = `${y}px`
+  el.innerHTML = `${tooltipHead(layer, tokens[pos] ?? '')}<table><tr><td>final top-1</td><td>${escapeHtml(displayToken(tok))} (${(p * 100).toFixed(1)}%)</td></tr><tr><td>first top-1 at</td><td>step ${firstStep.toLocaleString()}</td></tr></table>`
+  positionTooltip(el, evt)
 }
 
 export function buildSliderTicks(container: HTMLElement, steps: number[], liveSteps: number[], maxStep: number): void {

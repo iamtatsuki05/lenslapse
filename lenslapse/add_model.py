@@ -23,7 +23,7 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 
-from .sources import resolve_sources
+from .sources import Mode, resolve_sources
 
 # present in a repo checkout; absent when the package was pip-installed
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -86,6 +86,7 @@ def main() -> None:
     # register in models.json. `hf` is the name the app's AutoTokenizer resolves against its
     # local tokenizer/ directory, so it must match the directory we just wrote; `source` keeps
     # the true origin ref for tools that need real weights (the probe server).
+    mode: Mode
     if args.final_only:
         mode = "final"
     elif Path(args.model).is_dir():

@@ -17,6 +17,17 @@ export interface CellInfo extends PinnedCell {
   cell: GridCell
 }
 
+/** The one string format flash/marks Sets key cells by — a single source of truth for building
+ * (main.ts) and parsing (this file's outline()) instead of ad-hoc `${layer}:${pos}` templates. */
+export function cellKey(layer: number, pos: number): string {
+  return `${layer}:${pos}`
+}
+
+export function parseCellKey(key: string): PinnedCell {
+  const [layer, pos] = key.split(':').map(Number)
+  return { layer, pos }
+}
+
 interface LensGridCallbacks {
   onHover?: (cell: CellInfo | null, evt?: MouseEvent) => void
   onPin?: (pinned: PinnedCell | null) => void
@@ -134,7 +145,7 @@ export class LensGrid {
       ctx.strokeStyle = color
       ctx.lineWidth = 2
       for (const key of cells) {
-        const [layer, t] = key.split(':').map(Number)
+        const { layer, pos: t } = parseCellKey(key)
         if (layer < 0 || layer >= grid.layers || t < 0 || t >= grid.positions) continue
         const row = grid.layers - 1 - layer
         ctx.strokeRect(LABEL_W + t * CELL_W + 1, HEADER_H + row * CELL_H + 1, CELL_W - 2, CELL_H - 2)

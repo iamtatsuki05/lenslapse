@@ -54,17 +54,31 @@ export interface GridCell {
   top: TopEntry[]
 }
 
-export interface GridData {
+/** Grid shape shared by every per-cell view: the live/precomputed lens grid, the acquisition
+ * map, and the diff view all key their per-cell arrays by the same (layer, position) axes. */
+export interface GridDims {
   layers: number
   positions: number
+}
+
+export interface GridData extends GridDims {
   cells: GridCell[][]
 }
 
-export interface TrajectorySeries {
+/** A token tracked across training: the classic final-checkpoint top-3, the gold continuation,
+ * or a token the user typed into "track any token". */
+export interface TokenRef {
   id: number
   token: string
+}
+
+export interface TrajectorySeries extends TokenRef {
   points: [number, number, number][]
 }
+
+/** Which of the grid's cell colors mean "probability" vs something else entirely — the
+ * acquisition map colors by checkpoint order, and diff colors by turnover since a reference. */
+export type GridView = 'top1' | 'acq' | 'diff'
 
 const BASE = `${import.meta.env.BASE_URL}data/`
 
@@ -125,9 +139,13 @@ export function fmtStep(s: number): string {
   return `${Number.isInteger(k) ? k : Number(k.toFixed(1))}k`
 }
 
-export interface AcquisitionMap {
-  layers: number
-  positions: number
+/** Allocate a `layers`-long array of empty per-position arrays, ready for `arr[li].push(...)`
+ * — the shared shape every per-cell 2D grid below is built from. */
+function grid2D<T>(layers: number): T[][] {
+  return Array.from({ length: layers }, () => [])
+}
+
+export interface AcquisitionMap extends GridDims {
   /** index into `steps` of the first step where the cell's FINAL top-1 is already its top-1 */
   firstIdx: number[][]
   /** the final answer per cell: [token, final prob, id] */
@@ -145,11 +163,9 @@ export function acquisitionMap(shard: Shard, steps: number[]): AcquisitionMap | 
   const layers = last.top.length
   const positions = last.top[0].length
   const vocab = shard.vocab
-  const firstIdx: number[][] = []
-  const finalTop: TopEntry[][] = []
+  const firstIdx = grid2D<number>(layers)
+  const finalTop = grid2D<TopEntry>(layers)
   for (let li = 0; li < layers; li++) {
-    firstIdx.push([])
-    finalTop.push([])
     for (let t = 0; t < positions; t++) {
       const [finalId, finalP] = last.top[li][t][0]
       finalTop[li].push([vocab[String(finalId)] ?? '?', finalP, finalId])
@@ -167,9 +183,7 @@ export function acquisitionMap(shard: Shard, steps: number[]): AcquisitionMap | 
   return { layers, positions, firstIdx, finalTop }
 }
 
-export interface DiffMap {
-  layers: number
-  positions: number
+export interface DiffMap extends GridDims {
   /** per cell: did the top-1 flip between the two steps? */
   flipped: boolean[][]
   /** per cell: 1 - Jaccard(top-10 ids) — 0 = same candidate set, 1 = fully replaced */
@@ -188,15 +202,11 @@ export function diffMap(shard: Shard, refStep: number, curStep: number): DiffMap
   const entry = (cell: [number, number][]): TopEntry => [vocab[String(cell[0][0])] ?? '?', cell[0][1], cell[0][0]]
   const layers = cur.top.length
   const positions = cur.top[0].length
-  const flipped: boolean[][] = []
-  const change: number[][] = []
-  const refTop: TopEntry[][] = []
-  const curTop: TopEntry[][] = []
+  const flipped = grid2D<boolean>(layers)
+  const change = grid2D<number>(layers)
+  const refTop = grid2D<TopEntry>(layers)
+  const curTop = grid2D<TopEntry>(layers)
   for (let li = 0; li < layers; li++) {
-    flipped.push([])
-    change.push([])
-    refTop.push([])
-    curTop.push([])
     for (let t = 0; t < positions; t++) {
       const a = ref.top[li][t]
       const b = cur.top[li][t]
