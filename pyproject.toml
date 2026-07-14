@@ -9,7 +9,15 @@ description = "In-browser logit lens over training checkpoints: conversion pipel
 requires-python = ">=3.12"
 dependencies = [
     "torch>=2.13",
-    "transformers>=4.50",
+    # <5: transformers v5's LlamaTokenizer overrides the checkpoint's own tokenizer definition
+    # (same-root regression as https://github.com/huggingface/transformers/issues/45488, reported
+    # there for DeepSeek's ByteLevel BPE); for sarashina-style unigram SentencePiece models it
+    # manifests as single-character tokenization. >=4.57: the `dtype=` kwarg this package uses is
+    # silently dropped before 4.56, and 4.57 is the verified series.
+    "transformers>=4.57,<5",
+    # Llama-family tokenizers with legacy=False load through sentencepiece + protobuf in v4
+    "sentencepiece>=0.2",
+    "protobuf>=4.0",
     "onnx>=1.17",
     "onnxscript>=0.1",
     "onnxruntime>=1.20",
