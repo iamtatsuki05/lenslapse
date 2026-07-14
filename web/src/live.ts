@@ -44,10 +44,18 @@ export interface ProbeResult {
 
 // Optional local probe server for models too heavy for the browser.
 // ?probe=<url> connects and is remembered (localStorage) so later visits need no parameter;
-// ?probe=off forgets it. A locally-served app additionally auto-detects the default port —
-// a closed local port refuses instantly, so this costs nothing when no server is running.
-// Public (non-localhost) deployments never probe the visitor's machine without explicit opt-in.
-export function resolveProbeUrl(): string | null {
+// ?probe=off forgets it. A locally-served app additionally auto-detects its own origin (the
+// probe server can serve this app itself) and then the default port — a closed local port
+// refuses instantly, so this costs nothing when no server is running. Public (non-localhost)
+// deployments never probe the visitor's machine without explicit opt-in.
+export function resolveProbeCandidates(): { candidates: string[]; explicit: boolean } {
+  const toOrigin = (u: string): string | null => {
+    try {
+      return new URL(u, location.href).origin
+    } catch {
+      return null
+    }
+  }
   const param = new URLSearchParams(location.search).get('probe')
   if (param === 'off') {
     try {
@@ -55,7 +63,7 @@ export function resolveProbeUrl(): string | null {
     } catch {
       /* storage unavailable */
     }
-    return null
+    return { candidates: [], explicit: false }
   }
   if (param) {
     try {
@@ -63,39 +71,56 @@ export function resolveProbeUrl(): string | null {
     } catch {
       /* storage unavailable — still usable for this visit */
     }
-    return param
+    const origin = toOrigin(param)
+    return { candidates: origin ? [origin] : [], explicit: true }
   }
   try {
     const saved = localStorage.getItem('lenslapse-probe')
-    if (saved) return saved
+    if (saved) {
+      const origin = toOrigin(saved)
+      return { candidates: origin ? [origin] : [], explicit: true }
+    }
   } catch {
     /* storage unavailable */
   }
-  if (['localhost', '127.0.0.1'].includes(location.hostname)) return 'http://localhost:8017'
-  return null
-}
-const PROBE_URL = resolveProbeUrl()
-
-/** Origin of the configured probe server, or null when the app runs purely static. */
-export function probeServerOrigin(): string | null {
-  try {
-    return PROBE_URL ? new URL(PROBE_URL, location.href).origin : null
-  } catch {
-    return null
+  if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+    return { candidates: [...new Set([location.origin, 'http://localhost:8017'])], explicit: false }
   }
+  return { candidates: [], explicit: false }
+}
+const PROBE = resolveProbeCandidates()
+let resolvedProbeOrigin: string | null = null
+
+/** Candidate probe-server origins, most likely first (a previously reached one leads). */
+function probeOrigins(): string[] {
+  if (resolvedProbeOrigin) {
+    return [resolvedProbeOrigin, ...PROBE.candidates.filter((c) => c !== resolvedProbeOrigin)]
+  }
+  return PROBE.candidates
+}
+
+/** The probe server the app is talking to (or would try first), or null when purely static. */
+export function probeServerOrigin(): string | null {
+  return resolvedProbeOrigin ?? PROBE.candidates[0] ?? null
 }
 
 /** Server model registry ([{id, ref, mode, label, steps, origin}]) or null if unreachable. */
 export async function fetchServerModels(): Promise<ServerModel[] | null> {
-  if (!probeServerOrigin()) return null
-  try {
-    // hard timeout: a hanging request (e.g. a private-network preflight that never settles on
-    // an HTTPS page) must degrade to "no server", never stall the caller — boot awaits this
-    const res = await fetch(new URL('/models', probeServerOrigin()!), { signal: AbortSignal.timeout(4000) })
-    return res.ok ? await res.json() : null
-  } catch {
-    return null
+  for (const origin of probeOrigins()) {
+    try {
+      // hard timeout: a hanging request (e.g. a private-network preflight that never settles on
+      // an HTTPS page) must degrade to "no server", never stall the caller — boot awaits this
+      const res = await fetch(new URL('/models', origin), { signal: AbortSignal.timeout(4000) })
+      if (res.ok) {
+        const models = await res.json() // parse before caching: a static 200 must not poison the origin
+        resolvedProbeOrigin = origin
+        return models
+      }
+    } catch {
+      /* try the next candidate */
+    }
   }
+  return null
 }
 // ?fresh bypasses saved-probe replay (IndexedDB) and recomputes; the new result overwrites the
 // saved one. Needed after re-exporting a model under the same id, where replay would be stale.
@@ -161,23 +186,27 @@ export class LiveEngine {
   }
 
   async init(onStatus?: StatusFn): Promise<boolean> {
-    const serverOrigin = probeServerOrigin()
-    if (serverOrigin) {
+    for (const serverOrigin of probeOrigins()) {
+      let health: { ok?: boolean; models?: string[] } | null = null
       try {
         const res = await fetch(new URL('/health', serverOrigin), { signal: AbortSignal.timeout(4000) })
-        const health = res.ok ? await res.json() : null
-        if (health?.ok && health.models?.includes(this.modelId)) {
-          this.server = serverOrigin
-          this.backend = 'server'
-          this.available = true
-          return true
-        }
-        if (health?.ok) {
-          onStatus?.(`${this.modelId} is not registered on the probe server — falling back to in-browser inference`)
-        }
+        health = res.ok ? await res.json() : null
       } catch {
-        onStatus?.(`probe server ${PROBE_URL} unreachable — falling back to in-browser inference`)
+        continue // try the next candidate
       }
+      if (!health?.ok) continue
+      resolvedProbeOrigin = serverOrigin
+      if (health.models?.includes(this.modelId)) {
+        this.server = serverOrigin
+        this.backend = 'server'
+        this.available = true
+        return true
+      }
+      onStatus?.(`${this.modelId} is not registered on the probe server — falling back to in-browser inference`)
+      continue // another candidate may have this model (e.g. a second server on the default port)
+    }
+    if (PROBE.explicit && !resolvedProbeOrigin) {
+      onStatus?.(`probe server ${probeServerOrigin()} unreachable — falling back to in-browser inference`)
     }
     const resolved = await resolveManifest(this.modelId)
     if (resolved) {

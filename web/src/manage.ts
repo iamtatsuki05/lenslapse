@@ -13,8 +13,9 @@ const DEFAULT_SUITE_STEPS = '0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,
  * add/remove with the fresh server registry so the caller can rebuild its catalog.
  */
 export function setupManageModels(onChange: (serverModels: ServerModel[] | null) => void): void {
-  const origin = probeServerOrigin()
-  if (!origin) return
+  if (!probeServerOrigin()) return // no candidates at all (public host without opt-in)
+  // resolved lazily per request: the server may come up after the page booted
+  const origin = () => probeServerOrigin()!
   const btn = $('manage-models-btn')
   const dialog = $<HTMLDialogElement>('models-dialog')
   btn.hidden = false
@@ -62,7 +63,7 @@ export function setupManageModels(onChange: (serverModels: ServerModel[] | null)
     const oldLabel = browse.textContent
     browse.textContent = 'see the dialog…'
     try {
-      const res = await fetch(new URL('/pick-folder', origin), { signal: AbortSignal.timeout(310000) })
+      const res = await fetch(new URL('/pick-folder', origin()), { signal: AbortSignal.timeout(310000) })
       if (!res.ok) {
         const detail = await errorDetail(res)
         if (res.status !== 400) error.textContent = detail // 400 = user cancelled; stay quiet
@@ -106,7 +107,7 @@ export function setupManageModels(onChange: (serverModels: ServerModel[] | null)
         rm.addEventListener('click', async () => {
           rm.disabled = true
           try {
-            const res = await fetch(new URL(`/models/${encodeURIComponent(m.id)}`, origin!), {
+            const res = await fetch(new URL(`/models/${encodeURIComponent(m.id)}`, origin()), {
               method: 'DELETE',
               signal: AbortSignal.timeout(10000),
             })
@@ -143,7 +144,7 @@ export function setupManageModels(onChange: (serverModels: ServerModel[] | null)
     const poll = async (): Promise<void> => {
       if (gen !== listGen || !$<HTMLDialogElement>('models-dialog').open) return // row was re-rendered or dialog closed
       try {
-        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin!), {
+        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin()), {
           signal: AbortSignal.timeout(10000),
         })
         if (res.status === 404) return // no job — leave the button idle
@@ -172,7 +173,7 @@ export function setupManageModels(onChange: (serverModels: ServerModel[] | null)
       btn.disabled = true
       stat.textContent = 'starting…'
       try {
-        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin!), {
+        const res = await fetch(new URL(`/models/${encodeURIComponent(id)}/convert`, origin()), {
           method: 'POST',
           signal: AbortSignal.timeout(10000),
         })
@@ -217,7 +218,7 @@ export function setupManageModels(onChange: (serverModels: ServerModel[] | null)
     submit.disabled = true
     submit.textContent = 'validating…'
     try {
-      const res = await fetch(new URL('/models', origin), {
+      const res = await fetch(new URL('/models', origin()), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

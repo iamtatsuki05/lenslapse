@@ -162,3 +162,28 @@ def test_pick_folder_paths(client: TestClient, monkeypatch: pytest.MonkeyPatch) 
     )
     res = client.get("/pick-folder")
     assert res.status_code == 500 and "boom" in res.json()["detail"]
+
+
+def test_webapp_root_prefers_fresh_dist_and_requires_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dist = tmp_path / "web" / "dist"
+    packaged = tmp_path / "pkg" / "webapp"
+    monkeypatch.setattr(server, "_webapp_candidates", lambda: [dist, packaged])
+
+    # neither exists -> hosted-app fallback
+    assert server._webapp_root() is None
+
+    # a shell without data (repo tree without the wheel's force-included halves) is skipped
+    packaged.mkdir(parents=True)
+    (packaged / "index.html").write_text("<html></html>")
+    assert server._webapp_root() is None
+
+    # the packaged bundle works once complete
+    (packaged / "data").mkdir()
+    (packaged / "data" / "models.json").write_text("{}")
+    assert server._webapp_root() == packaged
+
+    # ...but a fresh checkout build wins over it
+    (dist / "data").mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>")
+    (dist / "data" / "models.json").write_text("{}")
+    assert server._webapp_root() == dist

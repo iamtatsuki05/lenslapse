@@ -560,11 +560,38 @@ _IN_REPO = (_PKG_PARENT / "web" / "public" / "data").is_dir()
 _STATE_HOME = _PKG_PARENT / "server" if _IN_REPO else Path.home() / ".lenslapse"
 
 
+def _webapp_root() -> Path | None:
+    """Directory holding a complete build of the web app, if one is available.
+
+    Serving the app from this server makes everything same-origin: no CORS, no
+    private-network permission prompt, and converted models resolve via /models/ directly.
+    Preference: a fresh `npm run build` in a checkout, then the bundle shipped inside the
+    wheel (lenslapse/webapp: app shell committed to git, data/tokenizer force-included at
+    build time). A shell-only directory (repo tree without the wheel's data) is skipped."""
+    for root in _webapp_candidates():
+        if (root / "index.html").is_file() and (root / "data" / "models.json").is_file():
+            return root
+    return None
+
+
+def _webapp_candidates() -> list[Path]:
+    candidates = []
+    if _IN_REPO:
+        candidates.append(_PKG_PARENT / "web" / "dist")
+    candidates.append(Path(__file__).resolve().parent / "webapp")
+    return candidates
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8017)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--models-json", default=str(_PKG_PARENT / "web/public/data/models.json"))
+    default_models_json = (
+        _PKG_PARENT / "web/public/data/models.json"
+        if _IN_REPO
+        else Path(__file__).resolve().parent / "webapp" / "data" / "models.json"  # bundled in the wheel
+    )
+    ap.add_argument("--models-json", default=str(default_models_json))
     ap.add_argument("--extra", action="append", default=[], help="id=hf_ref[:final] or id=/local/dir (repeatable)")
     ap.add_argument(
         "--registry-file",
@@ -594,14 +621,21 @@ def main() -> None:
     STATE["device_map"] = args.device_map
     STATE["models_root"] = Path(args.models_root)
     STATE["models_root"].mkdir(parents=True, exist_ok=True)
-    # serve converted ONNX pairs back to the app (mounted last so API routes keep precedence)
+    # serve converted ONNX pairs back to the app (mounted after the API routes, which win)
     app.mount("/models", StaticFiles(directory=STATE["models_root"]), name="models")
     if args.extra:
         save_user_registry()  # --extra entries persist like dialog-registered ones
     print(f"registry: {sorted(STATE['registry'])}; cache: {STATE['cache_dir']}", flush=True)
     display_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
-    app_url = f"https://iamtatsuki05.github.io/lenslapse/?probe=http://{display_host}:{args.port}"
-    print(f"probe server ready — open {app_url}", flush=True)
+    webapp = _webapp_root()
+    if webapp is not None:
+        # serve the web app itself: one local port for UI + API, fully offline-capable
+        app.mount("/", StaticFiles(directory=webapp, html=True), name="webapp")
+        app_url = f"http://{display_host}:{args.port}/"
+        print(f"probe server + web app ready — open {app_url}", flush=True)
+    else:
+        app_url = f"https://iamtatsuki05.github.io/lenslapse/?probe=http://{display_host}:{args.port}"
+        print(f"probe server ready (no local web bundle) — open {app_url}", flush=True)
     if args.open:
         threading.Timer(1.5, webbrowser.open, [app_url]).start()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")

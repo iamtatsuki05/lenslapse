@@ -12,12 +12,15 @@
 
 ```bash
 pip install "git+https://github.com/iamtatsuki05/lenslapse.git"
-lenslapse server        # starts the local probe server and opens the app in your browser
+lenslapse server        # serves the web app AND the probe API on one local port, then opens it
 ```
 
-Click **⚙ models** in the app's header, pick a Hugging Face id or press **📁 Browse…** to choose
-a checkpoint folder with your OS's file dialog, and probe it live — no ONNX conversion, no config
-files. (Your browser may ask permission to let the page reach the local server; allow it.)
+Everything runs on `http://localhost:8017/` — the UI is bundled into the package, so this works
+fully offline once models are downloaded, with no CORS or browser permission prompts.
+Click **⚙ models** in the header, pick a Hugging Face id or press **📁 Browse…** to choose a
+checkpoint folder with your OS's file dialog, and probe it live — no ONNX conversion, no config
+files. (In a checkout, `uv run lenslapse server` serves your own `web/dist` build instead;
+run `scripts/bundle_webapp.sh` after changing `web/` to refresh the packaged shell.)
 
 ## Why
 

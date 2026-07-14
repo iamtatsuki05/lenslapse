@@ -15,16 +15,16 @@ beforeEach(() => {
   localStorage.clear()
 })
 
-describe('resolveProbeUrl on a public (non-localhost) host', () => {
+describe('resolveProbeCandidates on a public (non-localhost) host', () => {
   it('never auto-detects a probe server', async () => {
     const live = await importLive()
-    expect(live.resolveProbeUrl()).toBeNull()
+    expect(live.resolveProbeCandidates()).toEqual({ candidates: [], explicit: false })
     expect(live.probeServerOrigin()).toBeNull()
   })
 
   it('still honors an explicitly remembered server', async () => {
     localStorage.setItem('lenslapse-probe', 'http://opted-in:8017')
     const live = await importLive()
-    expect(live.resolveProbeUrl()).toBe('http://opted-in:8017')
+    expect(live.resolveProbeCandidates()).toEqual({ candidates: ['http://opted-in:8017'], explicit: true })
   })
 })

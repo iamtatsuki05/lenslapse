@@ -43,6 +43,12 @@ default-groups = ["dev"]
 [tool.hatch.build.targets.wheel]
 packages = ["lenslapse"]
 
+# the web app's precomputed shards and tokenizers live in web/public (tracked in git);
+# bundling them next to the committed app shell makes `lenslapse server` fully self-contained
+[tool.hatch.build.targets.wheel.force-include]
+"web/public/data" = "lenslapse/webapp/data"
+"web/public/tokenizer" = "lenslapse/webapp/tokenizer"
+
 [tool.ruff]
 line-length = 119
 
