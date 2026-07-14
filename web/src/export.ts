@@ -11,6 +11,8 @@ export interface FigureMeta {
   step: number
   pinned: PinnedCell | null
   permalink: string
+  /** non-default grid views (acquisition map, diff) must say so — the colors mean something else */
+  view?: string
 }
 
 export interface ExportView {
@@ -86,7 +88,11 @@ export async function composeFigure({ grid, trajSvg, meta }: ExportView) {
   ctx.fillStyle = '#15161a'
   ctx.font = '600 15px Helvetica, Arial, sans-serif'
   ctx.textBaseline = 'alphabetic'
-  ctx.fillText(`LensLapse · ${meta.model} · training step ${meta.step.toLocaleString()}`, PAD, PAD + 6)
+  ctx.fillText(
+    `LensLapse · ${meta.model} · training step ${meta.step.toLocaleString()}${meta.view ? ` · ${meta.view}` : ''}`,
+    PAD,
+    PAD + 6
+  )
   ctx.font = '13px Helvetica, Arial, sans-serif'
   ctx.fillStyle = '#4a4d57'
   const promptLine = `“${meta.prompt}”${meta.pinned ? `   (pinned: ${meta.pinned.layer === 0 ? 'embedding' : `layer ${meta.pinned.layer}`}, position ${meta.pinned.pos})` : ''}`

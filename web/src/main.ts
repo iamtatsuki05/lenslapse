@@ -1024,6 +1024,7 @@ async function boot(): Promise<void> {
     if (state.mode !== 'pre') return
     if (state.gridView === 'diff') {
       setGridView('top1')
+      status('')
     } else {
       stopPlay() // freeze THIS checkpoint as the reference; scrubbing/playing then shows change vs it
       state.diffRef = currentStep()
@@ -1091,6 +1092,13 @@ async function boot(): Promise<void> {
       step: state.mode === 'live' ? (state.liveResult?.step ?? currentStep()) : currentStep(),
       pinned: state.pinned,
       permalink: location.href,
+      // colors in the special views are not probabilities — the figure must say so itself
+      view:
+        state.gridView === 'diff' && state.diffRef !== null
+          ? `top-10 turnover vs step ${state.diffRef.toLocaleString()}`
+          : state.gridView === 'acq'
+            ? 'acquisition map (step the final answer first became top-1)'
+            : undefined,
     },
   })
   const runExport = async (fn: 'png' | 'pdf', label: string) => {
