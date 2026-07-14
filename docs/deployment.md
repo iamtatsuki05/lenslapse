@@ -8,23 +8,24 @@ runs server-side, so hosting is free, permanent, and scales with the number of v
 ```bash
 pip install huggingface_hub
 hf auth login
-hf upload-large-folder <user>/lenslapse-onnx --repo-type dataset /path/to/lenslapse-models-multi
+hf upload-large-folder <user>/lenslapse-onnx --repo-type model /path/to/lenslapse-models-multi
 ```
 
 Notes:
-- A public **dataset** repo is used (free storage for public repos, CORS-enabled `resolve/` URLs; the
-  files are derived artifacts rather than a runnable model).
+- A public **model** repo is used (free storage for public repos, CORS-enabled `resolve/` URLs;
+  the files are model weights, just converted to ONNX).
 - Layout is one directory per model id:
   `<model-id>/manifest.json` + `<model-id>/step{N}/backbone.f16.onnx` + `<model-id>/step{N}/lens.f16.onnx`,
-  with model ids matching `web/public/data/models.json` (e.g. `pythia-14m`, `pythia-70m`, `pythia-160m`).
+  with model ids matching `web/public/data/models.json` (e.g. `pythia-14m`, `pythia-70m`,
+  `pythia-160m`, `gpt2`).
 - Add `docs/model-card.md` as the repo README.
 
 ## 2. Point the app at the repo
 
-Edit `HF_DEFAULT` in `web/src/live.js`:
+Edit `HF_DEFAULT` in `web/src/live.ts`:
 
-```js
-const HF_DEFAULT = 'https://huggingface.co/datasets/<user>/lenslapse-onnx/resolve/main/'
+```ts
+const HF_DEFAULT = 'https://huggingface.co/<user>/lenslapse-onnx/resolve/main/'
 ```
 
 The app resolves models in this order: `?models=` URL parameter → same-origin `models/` → `HF_DEFAULT`.
@@ -44,10 +45,12 @@ assets), well under the 1GB Pages limit. Model weights are **not** part of the s
 
 - [ ] Page loads and the lens grid renders for the default prompt (precomputed, no download).
 - [ ] Slider scrubbing updates the grid; ticks show live-capable diamonds.
-- [ ] The model picker switches between Pythia 14M / 70M / 160M (steps and grid depth change).
+- [ ] The model picker switches between the shipped models — Pythia 14M / 70M / 160M and GPT-2
+      (steps and grid depth change).
 - [ ] Clicking a cell pins it and draws trajectories; the permalink button reproduces the exact view
       (including the selected model).
 - [ ] Live probe on a free-text prompt downloads one checkpoint (~29MB for 14M, ~142MB for 70M,
-      ~326MB for 160M, once per checkpoint) and completes; badge shows WebGPU or WASM.
+      ~326MB for 160M, ~327MB for GPT-2, once per checkpoint) and completes; badge shows WebGPU
+      or WASM.
 - [ ] `?ep=wasm` forces the WASM path (for browsers without WebGPU).
 - [ ] DevTools Network tab shows requests only to the site origin and `huggingface.co`/its CDN.

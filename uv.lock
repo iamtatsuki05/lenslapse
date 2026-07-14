@@ -389,13 +389,6 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
-[package.optional-dependencies]
-server = [
-    { name = "fastapi" },
-    { name = "pydantic" },
-    { name = "uvicorn" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
@@ -409,20 +402,16 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "huggingface-hub", specifier = ">=0.26" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "onnx", specifier = ">=1.17" },
     { name = "onnxruntime", specifier = ">=1.20" },
     { name = "onnxscript", specifier = ">=0.1" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pydantic", marker = "extra == 'server'", specifier = ">=2.0" },
     { name = "torch", specifier = ">=2.13" },
     { name = "transformers", specifier = ">=4.50" },
     { name = "uvicorn", specifier = ">=0.30" },
-    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]
-provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [

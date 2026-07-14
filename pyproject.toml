@@ -23,10 +23,6 @@ dependencies = [
 [project.scripts]
 lenslapse = "lenslapse.cli:main"
 
-[project.optional-dependencies]
-# kept for the documented `pip install -e ".[server]"` command; the server deps are now core
-server = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2.0"]
-
 [dependency-groups]
 dev = [
     "pytest>=8.0",

@@ -8,7 +8,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 
 // Dev-only: serve converted checkpoints from a local directory under /models/ so the live probe
 // works without uploading weights anywhere. Production deployments point the app at a HF Hub repo
-// instead (see src/live.js HF_DEFAULT), so model files are never part of the built site.
+// instead (see src/live.ts HF_DEFAULT), so model files are never part of the built site.
 const MODELS_DIR = process.env.LENSLAPSE_MODELS_DIR
 
 function devModels() {

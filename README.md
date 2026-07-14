@@ -3,7 +3,7 @@
 **A fully in-browser time-lapse for the logit lens: scrub across Pythia's public training checkpoints and watch next-token predictions crystallize from noise into knowledge — layer by layer, with zero backend.**
 
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
-- **Three model sizes** (Pythia 14M / 70M / 160M) switchable in the header; the recipe itself is architecture-generic (GPT-NeoX, GPT-2, and Llama-style RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`).
+- **Four shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, plus GPT-2 124M (final checkpoint) — switchable in the header; the recipe itself is architecture-generic (GPT-NeoX, GPT-2, and Llama-style RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`).
 - **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3×) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
 - Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
@@ -37,7 +37,7 @@ Pythia checkpoint (HF Hub, revision step{N})
         └─ lens.f16.onnx       hidden [N, H] → logits [N, V]           (final_layer_norm + unembedding)
    └─ lenslapse/precompute_lens.py → static JSON shards (top-10 per cell + exact target trajectories)
 
-web/ (Vite, vanilla JS)
+web/ (Vite, TypeScript)
    ├─ precomputed mode: fetch JSON shard → canvas grid + SVG trajectories (no model download)
    └─ live mode: onnxruntime-web (WebGPU→WASM fallback) + @huggingface/transformers tokenizer
 ```
@@ -95,7 +95,7 @@ change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style R
 For models too large to download into a browser, run the optional probe server:
 
 ```bash
-pip install -e ".[server]"
+# the server ships with the package — install via the Quick start (pip) or `uv sync` (checkout)
 lenslapse server --extra my-big-model=meta-llama/Llama-3.2-1B:final   # or: uv run lenslapse server
 # a locally served app (npm run dev / preview) finds the default port by itself;
 # probe any suite step — the badge switches to "live · server"
@@ -165,6 +165,7 @@ after retraining.
 ## Benchmark
 
 ```bash
+cd web
 npx playwright install chromium firefox webkit
 LENSLAPSE_MODELS_DIR=/path/to/models npm run preview -- --port 5199 &
 node bench/bench.mjs --base http://localhost:5199 --out bench.json
@@ -175,10 +176,10 @@ execution providers (WebGPU/WASM), emulated CPU throttling, model sizes, and pro
 
 ## Deploy (zero cost)
 
-1. Upload the converted models to a public Hugging Face repo and set `HF_DEFAULT` in `web/src/live.js`.
+1. Upload the converted models to a public Hugging Face model repo and set `HF_DEFAULT` in `web/src/live.ts`.
 2. `npm run build`, publish `web/dist/` to GitHub Pages (workflow in `.github/workflows/deploy-pages.yml`).
 3. There is no step 3 — no server, no keys, no bills. See `docs/deployment.md`.
 
 ## License
 
-MIT. Pythia checkpoints are © EleutherAI, Apache-2.0.
+MIT. Pythia checkpoints are © EleutherAI, Apache-2.0; GPT-2 weights are © OpenAI, MIT (Modified).
