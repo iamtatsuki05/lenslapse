@@ -8,12 +8,19 @@ const M = { top: 14, right: 12, bottom: 34, left: 40 }
 
 const xlog = (s: number) => Math.log10(s + 1)
 
+/** Stable token-id -> color map, so the trajectory, layer profile, and labels stay consistent. */
+export function assignSeriesColors(series: { id: number }[]): Map<number, string> {
+  const map = new Map<number, string>()
+  series.slice(0, SERIES_COLORS.length).forEach((s, i) => map.set(s.id, SERIES_COLORS[i]))
+  return map
+}
+
 export function renderTrajectory(
   svg: SVGSVGElement,
   series: TrajectorySeries[],
   steps: number[],
   currentStep: number,
-  { goldId }: { goldId?: number } = {}
+  { goldId, colors }: { goldId?: number; colors?: Map<number, string> } = {}
 ): void {
   const W = svg.clientWidth || 360
   const H = svg.clientHeight || 240
@@ -66,7 +73,7 @@ export function renderTrajectory(
   })
 
   series.slice(0, SERIES_COLORS.length).forEach((s, i) => {
-    const color = SERIES_COLORS[i % SERIES_COLORS.length]
+    const color = colors?.get(s.id) ?? SERIES_COLORS[i % SERIES_COLORS.length]
     const d = s.points.map(([st, p], j) => `${j ? 'L' : 'M'}${X(st).toFixed(1)},${Y(p).toFixed(1)}`).join('')
     mk('path', { d, fill: 'none', stroke: color, 'stroke-width': s.id === goldId ? 2.6 : 1.7 })
     for (const [st, p] of s.points) mk('circle', { cx: X(st), cy: Y(p), r: 2.1, fill: color })
@@ -83,5 +90,74 @@ export function renderTrajectory(
       },
       displayToken(s.token) + (s.id === goldId ? ' ★' : '')
     )
+  })
+}
+
+/** The classic logit-lens view: p vs layer at one position and step (linear x, emb..L_n). */
+export function renderLayerProfile(
+  svg: SVGSVGElement,
+  series: TrajectorySeries[], // points: [[layer, p, rank], ...]
+  layers: number,
+  pinnedLayer: number,
+  { goldId, colors }: { goldId?: number; colors?: Map<number, string> } = {}
+): void {
+  const W = svg.clientWidth || 360
+  const H = svg.clientHeight || 130
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`)
+  svg.replaceChildren()
+  if (!series.length || layers < 2) return
+
+  const B = { top: 8, right: 12, bottom: 26, left: 40 }
+  const X = (li: number) => B.left + (li / (layers - 1)) * (W - B.left - B.right)
+  const yMax = Math.max(0.05, ...series.flatMap((s) => s.points.map((p) => p[1])))
+  const Y = (p: number) => B.top + (1 - p / yMax) * (H - B.top - B.bottom)
+
+  const mk = (tag: string, attrs: Record<string, string | number>, text?: string | null) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag)
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, String(v))
+    if (text != null) el.textContent = text
+    svg.appendChild(el)
+    return el
+  }
+
+  const axisColor = 'color-mix(in oklab, currentColor 30%, transparent)'
+  for (const p of [0, yMax]) {
+    mk('line', { x1: B.left, x2: W - B.right, y1: Y(p), y2: Y(p), stroke: axisColor, 'stroke-width': p === 0 ? 1 : 0.4 })
+    mk(
+      'text',
+      { x: B.left - 6, y: Y(p) + 3.5, 'text-anchor': 'end', 'font-size': 9, fill: 'currentColor', opacity: 0.65 },
+      p === 0 ? '0' : yMax.toFixed(yMax >= 0.1 ? 2 : 3)
+    )
+  }
+  const every = layers > 14 ? 4 : layers > 8 ? 2 : 1
+  for (let li = 0; li < layers; li++) {
+    if (li % every && li !== layers - 1) continue
+    mk(
+      'text',
+      { x: X(li), y: H - B.bottom + 12, 'text-anchor': 'middle', 'font-size': 9, fill: 'currentColor', opacity: 0.65 },
+      li === 0 ? 'emb' : `L${li}`
+    )
+  }
+  mk(
+    'text',
+    { x: (B.left + W - B.right) / 2, y: H - 3, 'text-anchor': 'middle', 'font-size': 10, fill: 'currentColor', opacity: 0.75 },
+    'layer (lens read-out depth)'
+  )
+  // pinned-layer rule ties this chart to the outlined grid cell
+  mk('line', {
+    x1: X(pinnedLayer),
+    x2: X(pinnedLayer),
+    y1: B.top,
+    y2: H - B.bottom,
+    stroke: 'currentColor',
+    'stroke-dasharray': '3 3',
+    opacity: 0.6,
+  })
+
+  series.slice(0, SERIES_COLORS.length).forEach((s, i) => {
+    const color = colors?.get(s.id) ?? SERIES_COLORS[i % SERIES_COLORS.length]
+    const d = s.points.map(([li, p], j) => `${j ? 'L' : 'M'}${X(li).toFixed(1)},${Y(p).toFixed(1)}`).join('')
+    mk('path', { d, fill: 'none', stroke: color, 'stroke-width': s.id === goldId ? 2.4 : 1.5 })
+    for (const [li, p] of s.points) mk('circle', { cx: X(li), cy: Y(p), r: 1.8, fill: color })
   })
 }

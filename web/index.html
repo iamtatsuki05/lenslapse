@@ -27,6 +27,7 @@
           <button id="manage-models-btn" class="chip btn" hidden title="Register models on the local probe server">
             ⚙ models
           </button>
+          <button id="dice-btn" class="chip btn" hidden title="Jump to a random prompt, step, and cell">🎲</button>
           <span id="step-readout" class="chip step-chip">step —</span>
           <span id="backend-badge" class="chip badge">precomputed</span>
           <button id="permalink-btn" class="chip btn" title="Copy a permalink to the current view">🔗 permalink</button>
@@ -35,6 +36,8 @@
             <div class="export-options">
               <button id="export-png" class="btn">PNG (3×)</button>
               <button id="export-pdf" class="btn">PDF</button>
+              <button id="copy-cli" class="btn" title="Copy the lenslapse CLI command that reproduces this probe">copy CLI</button>
+              <button id="copy-curl" class="btn" title="Copy a cURL request against the probe server API">copy cURL</button>
             </div>
           </details>
           <a id="about-link" class="chip btn" href="./about/" title="Project page (EN/JA)">About</a>
@@ -68,7 +71,11 @@
             <input id="step-slider" type="range" min="0" max="0" step="1" value="0" aria-label="training step" />
             <div id="slider-ticks"></div>
           </div>
-          <div class="slider-scale mono"><span>step 0</span><span id="slider-max-label">step 143,000</span></div>
+          <div class="slider-scale mono">
+            <span>step 0</span>
+            <a id="embed-link" href="./" target="_blank" rel="noopener" hidden>LensLapse ↗</a>
+            <span id="slider-max-label">step 143,000</span>
+          </div>
         </div>
       </section>
 
@@ -112,6 +119,19 @@
               </button>
             </div>
             <svg id="traj-svg" role="img" aria-label="token probability across training steps"></svg>
+            <div id="track-row" hidden>
+              <input id="track-input" placeholder="track any token, e.g. ␣Kyoto" aria-label="token to track" />
+              <button id="track-btn" class="btn" title="Add this token to the traced trajectories (runs a live trace)">
+                ＋ track
+              </button>
+            </div>
+            <div id="layer-caption" class="hint" hidden></div>
+            <svg
+              id="layer-svg"
+              role="img"
+              aria-label="token probability by layer at the pinned position"
+              style="display: none"
+            ></svg>
             <div id="race-caption" class="hint" hidden></div>
             <div id="race-bars" class="race" hidden aria-label="top-10 tokens at the pinned cell"></div>
           </section>

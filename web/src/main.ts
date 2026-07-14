@@ -3,6 +3,7 @@ import {
   acquisitionMap,
   fmtStep,
   gridFromShard,
+  layerProfileFromShard,
   loadIndex,
   loadModels,
   loadShard,
@@ -10,10 +11,11 @@ import {
   trajectoryFromShard,
 } from './data'
 import { LensGrid } from './grid'
-import { LiveEngine, fetchServerModels } from './live'
+import { LiveEngine, fetchServerModels, probeServerOrigin } from './live'
 import { setupManageModels } from './manage'
 import { renderRace } from './race'
-import { renderTrajectory } from './traj'
+import { firstContentToken, probeCliCommand, probeCurlCommand } from './snippets'
+import { assignSeriesColors, renderLayerProfile, renderTrajectory } from './traj'
 import {
   EXAMPLE_TEXTS,
   STORY_CARDS,
@@ -25,7 +27,7 @@ import {
   showTooltip,
 } from './ui'
 import { legendGradient } from './color'
-import type { ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry } from './data'
+import type { ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry, TrajectorySeries } from './data'
 import type { PinnedCell } from './grid'
 import type { ProbeResult, ServerModel } from './live'
 import type { StoryCard } from './ui'
@@ -44,6 +46,7 @@ const state = {
   gridView: 'top1' as 'top1' | 'acq', // 'acq' = acquisition map (when each cell first got its final answer)
   logColor: false, // color cells by log10(p) — reveals early-training structure
   compareId: null as string | null, // second model rendered in lockstep under the main grid
+  extraTargets: [] as { id: number; token: string }[], // user-tracked tokens added to traces
   steps: [] as number[],
   liveResult: null as LiveResult | null, // cached last live probe {text, step, grid, tokens}
   // trajectory sweep over every checkpoint for the current live prompt
@@ -277,12 +280,38 @@ async function updateRace(): Promise<void> {
   renderRace(bars, top, { goldId, limit: 10 })
 }
 
+function hideLayerProfile(): void {
+  $('layer-caption').hidden = true
+  const svg = $<SVGSVGElement>('layer-svg')
+  svg.style.display = 'none'
+  svg.replaceChildren()
+}
+
+function showLayerProfile(
+  series: TrajectorySeries[],
+  layers: number,
+  pinnedLayer: number,
+  opts: { goldId?: number; colors?: Map<number, string> }
+): void {
+  if (!series.length || layers < 2) {
+    hideLayerProfile()
+    return
+  }
+  $('layer-caption').hidden = false
+  $('layer-caption').textContent = `layer profile — step ${currentStep().toLocaleString()}`
+  const svg = $<SVGSVGElement>('layer-svg')
+  svg.style.display = 'block'
+  renderLayerProfile(svg, series, layers, pinnedLayer, opts)
+}
+
 async function refreshTrajectory(): Promise<void> {
   const svg = $<SVGSVGElement>('traj-svg')
   const sub = $('traj-subtitle')
   const sweepBtn = $<HTMLButtonElement>('traj-sweep')
+  const eng = engines.get(state.model!)
+  // token tracking rides on the live-trace machinery: offer it whenever a trace is possible
+  $('track-row').hidden = !eng?.available || sweepableSteps().length < 2
   if (state.mode === 'live') {
-    const eng = engines.get(state.model!)
     const canSweep = !!state.liveText && !!eng?.available && sweepableSteps().length > 1
     sweepBtn.hidden = !canSweep
     const sweep = state.liveSweep
@@ -301,10 +330,24 @@ async function refreshTrajectory(): Promise<void> {
         .filter((sr) => sr.points.length)
         .sort((a, b) => b.points[b.points.length - 1][1] - a.points[a.points.length - 1][1])
       sub.textContent = `${state.pinned.layer === 0 ? 'embedding' : `layer ${state.pinned.layer}`}, position ${pos} across ${steps.length} live-probed checkpoints`
-      renderTrajectory(svg, series, steps, currentStep(), {})
+      const colors = assignSeriesColors(series)
+      renderTrajectory(svg, series, steps, currentStep(), { colors })
+      const cur = sweep.byStep.get(currentStep())
+      const profile = cur?.tgt
+        ? sweep.targets
+            .map(({ id, token }) => {
+              const t = cur.tgt![String(id)]
+              return t
+                ? { id, token, points: t.p.map((row, li) => [li, row[pos], t.r[li][pos]] as [number, number, number]) }
+                : null
+            })
+            .filter((s): s is NonNullable<typeof s> => s !== null)
+        : []
+      showLayerProfile(profile, cur?.grid.layers ?? 0, layer, { colors })
       return
     }
     svg.replaceChildren()
+    hideLayerProfile()
     sub.textContent = canSweep
       ? state.pinned
         ? sweep && sweep.text === state.liveText && state.pinned.pos !== sweep.pos
@@ -317,6 +360,7 @@ async function refreshTrajectory(): Promise<void> {
   sweepBtn.hidden = true
   if (!state.pinned) {
     svg.replaceChildren()
+    hideLayerProfile()
     sub.textContent = 'click a cell in the grid'
     return
   }
@@ -327,9 +371,11 @@ async function refreshTrajectory(): Promise<void> {
   const { layer, pos } = state.pinned
   const series = trajectoryFromShard(shard, prompt, layer, pos, index!.steps)
   sub.textContent = `${layer === 0 ? 'embedding' : `layer ${layer}`}, position ${pos} (“${prompt.tokens[pos]}” →)`
-  renderTrajectory(svg, series, index!.steps, currentStep(), {
-    goldId: pos === prompt.tokens.length - 1 ? prompt.gold_id : undefined,
-  })
+  const goldId = pos === prompt.tokens.length - 1 ? prompt.gold_id : undefined
+  const colors = assignSeriesColors(series)
+  renderTrajectory(svg, series, index!.steps, currentStep(), { goldId, colors })
+  const profile = layerProfileFromShard(shard, prompt, pos, currentStep())
+  showLayerProfile(profile, profile[0]?.points.length ?? 0, layer, { goldId, colors })
 }
 
 function refreshStepUI(): void {
@@ -391,6 +437,30 @@ function refreshPlayControls(): void {
   $<HTMLButtonElement>('acq-toggle').hidden = !pre || state.steps.length < 2
   $<HTMLButtonElement>('log-toggle').hidden = !pre || state.gridView === 'acq'
   $<HTMLSelectElement>('compare-select').hidden = !pre || state.gridView === 'acq'
+  $<HTMLButtonElement>('dice-btn').hidden = !index?.prompts.length
+}
+
+/** Serendipity, Neuronpedia-style: jump to a random (prompt, step, cell). */
+function randomView(): void {
+  if (!index?.prompts.length) return
+  stopPlay()
+  if (state.gridView === 'acq') setGridView('top1')
+  viewGen++
+  clearTimeout(liveDebounce)
+  state.mode = 'pre'
+  const prompt = index.prompts[Math.floor(Math.random() * index.prompts.length)]
+  state.promptId = prompt.id
+  $<HTMLSelectElement>('prompt-select').value = String(prompt.id)
+  state.stepIdx = Math.floor(Math.random() * state.steps.length)
+  $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
+  state.pinned = { layer: Math.max(1, Math.floor(Math.random() * gridLayers())), pos: prompt.tokens.length - 1 }
+  grid.pinned = { ...state.pinned }
+  refreshBadgeAndTicks()
+  refreshStepUI()
+  syncHash()
+  refreshGrid()
+  refreshTrajectory()
+  updateRace()
 }
 
 function rebuildCompareSelect(): void {
@@ -478,7 +548,10 @@ async function runLiveProbe(text: string): Promise<void> {
     state.mode = 'live'
     if (state.gridView === 'acq') setGridView('top1') // the map needs all-step shards, which live mode lacks
     refreshPlayControls()
-    if (state.liveSweep && state.liveSweep.text !== text) state.liveSweep = null
+    if (state.liveSweep && state.liveSweep.text !== text) {
+      state.liveSweep = null
+      state.extraTargets = [] // tracked tokens belong to the text they were added for
+    }
     state.liveText = text
     state.liveResult = { ...res, text, step }
     if (state.pinned && (state.pinned.layer >= res.grid.layers || state.pinned.pos >= res.grid.positions)) {
@@ -535,6 +608,8 @@ async function runSweep(): Promise<void> {
     if (gen !== viewGen || run !== sweepSeq) return
     const finalCell = finalRes.grid.cells[finalRes.grid.layers - 1][Math.min(pin.pos, finalRes.grid.positions - 1)]
     const targets = finalCell.top.slice(0, 3).map(([token, , id]) => ({ id, token }))
+    for (const ex of state.extraTargets) if (!targets.some((t) => t.id === ex.id)) targets.push(ex)
+    targets.splice(5) // the chart palette holds five series
     state.liveSweep = { text, pos: pin.pos, targets, byStep: new Map() }
     const ids = targets.map((t) => t.id)
     for (let i = 0; i < steps.length; i++) {
@@ -589,9 +664,45 @@ async function applyStory(card: StoryCard): Promise<void> {
   refreshTrajectory()
 }
 
+/** Track an arbitrary token: tokenize it, add it to the trace targets, and (re)run the sweep.
+ * Works from a precomputed view too — the trace itself always runs live. */
+async function trackToken(raw: string): Promise<void> {
+  if (!raw) return
+  const engine = getEngine()
+  await enginesReady.get(engine.modelId)
+  if (!engine.available) {
+    status('tracking a token needs live probing, which is unavailable for this model right now')
+    return
+  }
+  const text = state.mode === 'live' && state.liveText ? state.liveText : currentPrompt().text
+  let ids: number[]
+  let tokens: string[]
+  try {
+    ;({ ids, tokens } = await engine.tokenize(raw))
+  } catch (e) {
+    status(`could not tokenize “${raw}”: ${(e as Error).message}`)
+    return
+  }
+  if (!ids.length) return
+  const pick = firstContentToken(tokens)
+  const id = ids[pick]
+  const token = tokens[pick]
+  if (ids.length > 1) status(`“${raw}” splits into ${ids.length} tokens — tracking “${token}”`)
+  if (!state.extraTargets.some((t) => t.id === id)) state.extraTargets.push({ id, token })
+  if (state.mode !== 'live' || state.liveText !== text) {
+    $<HTMLInputElement>('live-input').value = text
+    await runLiveProbe(text)
+    if (state.mode !== 'live' || state.liveText !== text) return // probe failed or was superseded
+  }
+  await runSweep()
+}
+
 /* ---------- kiosk mode (?kiosk): loop the time-lapse through the emergence stories ---------- */
 
 const KIOSK = new URLSearchParams(location.search).has('kiosk')
+// ?embed: chrome-less view for iframes (header, prompt bar, and gallery hidden via CSS)
+const EMBED = new URLSearchParams(location.search).has('embed')
+if (EMBED) document.body.classList.add('embed')
 let kioskIdx = 0
 
 function kioskNext(): void {
@@ -715,6 +826,7 @@ async function switchModel(id: string): Promise<void> {
   state.liveResult = null
   state.liveSweep = null // another model's trajectory must never render as this one's
   state.liveText = ''
+  state.extraTargets = [] // tracked tokens are model-specific ids
   if (state.compareId === id) state.compareId = null
   setGridView('top1')
   refreshPlayControls()
@@ -820,6 +932,7 @@ async function boot(): Promise<void> {
     clearTimeout(liveDebounce)
     state.mode = 'pre'
     state.promptId = Number(sel.value)
+    state.extraTargets = []
     state.pinned = null
     grid.pinned = null
     refreshBadgeAndTicks()
@@ -866,6 +979,17 @@ async function boot(): Promise<void> {
     syncHash()
     refreshCompare()
   })
+  $('dice-btn').addEventListener('click', () => randomView())
+  $('track-btn').addEventListener('click', () => trackToken($<HTMLInputElement>('track-input').value))
+  $('track-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') trackToken($<HTMLInputElement>('track-input').value)
+  })
+  if (EMBED) {
+    const a = $<HTMLAnchorElement>('embed-link')
+    a.hidden = false
+    // resolve at click time so the link opens the full app on the exact embedded view
+    a.addEventListener('pointerdown', () => a.setAttribute('href', `./${location.hash}`))
+  }
   document.addEventListener('keydown', (e) => {
     if (e.code !== 'Space' || e.repeat) return
     const t = e.target as HTMLElement | null
@@ -916,6 +1040,27 @@ async function boot(): Promise<void> {
   }
   $('export-png').addEventListener('click', () => runExport('png', 'PNG figure'))
   $('export-pdf').addEventListener('click', () => runExport('pdf', 'PDF figure'))
+  const copySnippet = async (kind: 'cli' | 'curl') => {
+    $('export-menu').removeAttribute('open')
+    const text = state.mode === 'live' ? state.liveText : currentPrompt().text
+    const step = state.mode === 'live' ? (state.liveResult?.step ?? currentStep()) : currentStep()
+    const origin = probeServerOrigin() ?? 'http://localhost:8017'
+    const cmd =
+      kind === 'cli' ? probeCliCommand(state.model!, text, step) : probeCurlCommand(origin, state.model!, text, step)
+    try {
+      await navigator.clipboard.writeText(cmd)
+      status(
+        kind === 'cli'
+          ? 'CLI command copied — reproduces this probe via lenslapse probe'
+          : 'cURL request copied — hits the probe-server /probe API'
+      )
+    } catch {
+      status('clipboard unavailable — the command is printed in the console instead')
+      console.log(cmd)
+    }
+  }
+  $('copy-cli').addEventListener('click', () => copySnippet('cli'))
+  $('copy-curl').addEventListener('click', () => copySnippet('curl'))
 
   try {
     await refreshGrid()

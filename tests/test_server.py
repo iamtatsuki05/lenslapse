@@ -132,6 +132,30 @@ def test_read_cache_replays_and_heals_corruption(tmp_path: Path) -> None:
     assert not corrupt.exists()  # deleted so the next probe recomputes instead of erroring forever
 
 
+def test_tokenize_uses_the_models_own_tokenizer(
+    client: TestClient, trainer_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class StubTok:
+        def __call__(self, text: str) -> dict:
+            return {"input_ids": list(range(len(text.split())))}
+
+        def convert_ids_to_tokens(self, ids: list) -> list:
+            return [f"tok{i}" for i in ids]
+
+    class StubAuto:
+        @staticmethod
+        def from_pretrained(ref: str, revision: str | None = None) -> StubTok:
+            return StubTok()
+
+    monkeypatch.setattr(server, "AutoTokenizer", StubAuto)
+    monkeypatch.setattr(server, "TOKENIZERS", server.OrderedDict())
+    assert client.post("/tokenize", json={"model": "ghost", "text": "hi"}).status_code == 404
+    register_local(client, trainer_dir)
+    res = client.post("/tokenize", json={"model": "my-run", "text": "one two three"})
+    assert res.status_code == 200
+    assert res.json() == {"ids": [0, 1, 2], "tokens": ["tok0", "tok1", "tok2"]}
+
+
 def test_convert_guards(client: TestClient, trainer_dir: Path) -> None:
     assert client.post("/models/ghost/convert").status_code == 404
     server.STATE["registry"]["shipped"] = RegistryEntry(ref="org/shipped", mode="suite", origin="catalog")

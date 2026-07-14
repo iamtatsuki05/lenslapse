@@ -237,6 +237,27 @@ export class LiveEngine {
     return true
   }
 
+  /** Tokenize with this model's own tokenizer: locally when it is loaded, else via the probe
+   * server (server-backed models never ship a tokenizer to the browser). */
+  async tokenize(text: string): Promise<{ ids: number[]; tokens: string[] }> {
+    if (this.tokenizer) {
+      const enc = this.tokenizer(text)
+      const ids = Array.from(enc.input_ids.data as ArrayLike<bigint | number>, Number)
+      return { ids, tokens: ids.map((id) => this.tokenizer!.decode([id])) }
+    }
+    if (this.server) {
+      const res = await fetch(new URL('/tokenize', this.server), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: this.modelId, text }),
+        signal: AbortSignal.timeout(30000),
+      })
+      if (!res.ok) throw new Error(`tokenize failed (${res.status})`)
+      return await res.json()
+    }
+    throw new Error('no tokenizer available for this model')
+  }
+
   liveSteps(): number[] {
     return this.manifest ? this.manifest.steps.map((s) => s.step) : []
   }

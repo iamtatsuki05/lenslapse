@@ -168,6 +168,24 @@ export function acquisitionMap(shard: Shard, steps: number[]): AcquisitionMap | 
 }
 
 /**
+ * Layer profile at one (pos, step): the classic logit-lens curve, p vs layer, for the
+ * prompt's target tokens. Returns [{id, token, points: [[layer, prob, rank], ...]}].
+ */
+export function layerProfileFromShard(shard: Shard, prompt: Prompt, pos: number, step: number): TrajectorySeries[] {
+  const entry = shard.steps[String(step)]
+  if (!entry?.tgt) return []
+  const out: TrajectorySeries[] = []
+  for (const id of new Set(prompt.targets[pos] ?? [])) {
+    const t = entry.tgt[String(id)]
+    if (!t) continue
+    const points: [number, number, number][] = t.p.map((row, li) => [li, row[pos], t.r[li][pos]])
+    out.push({ id, token: shard.vocab[String(id)] ?? '?', points })
+  }
+  out.sort((a, b) => b.points.at(-1)![1] - a.points.at(-1)![1])
+  return out
+}
+
+/**
  * Trajectory of target tokens for a pinned (layer, pos) across all steps present in the shard.
  * Returns [{id, token, points: [[step, prob, rank], ...]}].
  */

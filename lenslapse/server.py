@@ -103,6 +103,7 @@ STATE: dict = {
     "dtype": "float32",
 }
 LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
+TOKENIZERS: OrderedDict = OrderedDict()  # (ref, revision) -> tokenizer only (cheap; for /tokenize)
 # FastAPI runs sync endpoints in a threadpool; lens_all installs forward hooks on the shared
 # model, so concurrent probes would capture each other's layer outputs (and persist the garbage
 # to the cache). One global lock serializes load+forward+write — fine for a batch-1 local server.
@@ -120,6 +121,11 @@ class ProbeRequest(BaseModel):
     # optional token ids to track exactly (probability + rank at every layer/position); lets the
     # app draw training trajectories for live prompts the same way precomputed shards do
     targets: list[int] | None = None
+
+
+class TokenizeRequest(BaseModel):
+    model: str
+    text: str
 
 
 class RegisterRequest(BaseModel):
@@ -486,6 +492,27 @@ def convert_status(model_id: str) -> dict[str, Any]:
                 f"exported — upload {STATE['models_root'] / model_id} to your model host to use it in-browser"
             )
         return result
+
+
+@app.post("/tokenize")
+def tokenize(req: TokenizeRequest) -> dict[str, Any]:
+    """Tokenize with a registered model's own tokenizer — the app's track-a-token feature needs
+    ids for server-backed models, whose tokenizers never ship to the browser."""
+    entry = STATE["registry"].get(req.model)
+    if entry is None:
+        raise HTTPException(404, f"unknown model id {req.model!r}")
+    steps = model_steps(entry)
+    if not steps:
+        raise HTTPException(404, f"{req.model!r} has no checkpoints")
+    src = source_for(req.model, steps[-1])
+    key = (src.load_ref, src.revision)
+    if key not in TOKENIZERS:
+        while len(TOKENIZERS) >= 8:
+            TOKENIZERS.popitem(last=False)
+        TOKENIZERS[key] = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision)
+    tok = TOKENIZERS[key]
+    ids = tok(req.text)["input_ids"]
+    return {"ids": [int(i) for i in ids], "tokens": tok.convert_ids_to_tokens(ids)}
 
 
 def probe_cache_key(src: CheckpointSource, req: ProbeRequest) -> str:

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { acquisitionMap, fmtStep, nearestStep } from '../src/data'
+import { acquisitionMap, fmtStep, layerProfileFromShard, nearestStep } from '../src/data'
 import { logProb01 } from '../src/color'
-import type { Shard } from '../src/data'
+import type { Prompt, Shard } from '../src/data'
 
 // 1 layer x 2 positions, steps 0/10/20. Cell 0: B,A,A -> final A first at step 10.
 // Cell 1: A,B,A -> final A first at step 0 (the map records first appearance, not stability).
@@ -41,6 +41,31 @@ describe('fmtStep', () => {
     expect(fmtStep(1000)).toBe('1k')
     expect(fmtStep(2738)).toBe('2.7k')
     expect(fmtStep(143000)).toBe('143k')
+  })
+})
+
+describe('layerProfileFromShard', () => {
+  it('returns p-vs-layer curves for the prompt targets, sorted by final-layer probability', () => {
+    const prompt = { targets: [[], [1, 2]] } as unknown as Prompt
+    const withTgt: Shard = {
+      vocab: { '1': 'A', '2': 'B' },
+      steps: {
+        '20': {
+          top: [[[[1, 0.6]], [[1, 0.5]]]],
+          tgt: {
+            '1': { p: [[0.1, 0.5], [0.2, 0.6]], r: [[3, 1], [2, 1]] },
+            '2': { p: [[0.4, 0.7], [0.1, 0.2]], r: [[1, 1], [4, 5]] },
+          },
+        },
+      },
+    }
+    const series = layerProfileFromShard(withTgt, prompt, 1, 20)
+    expect(series.map((s) => s.token)).toEqual(['A', 'B']) // 0.6 at the last layer beats 0.2
+    expect(series[0].points).toEqual([
+      [0, 0.5, 1],
+      [1, 0.6, 1],
+    ])
+    expect(layerProfileFromShard(withTgt, prompt, 1, 999)).toEqual([])
   })
 })
 

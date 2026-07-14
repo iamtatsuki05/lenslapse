@@ -306,6 +306,63 @@ body {
   overflow-x: auto;
 }
 
+/* ---------- track-a-token row + layer profile ---------- */
+#track-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+#track-row[hidden] {
+  display: none;
+}
+
+#track-input {
+  flex: 1;
+  min-width: 0;
+  font: 11.5px 'SF Mono', ui-monospace, monospace;
+  padding: 4px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#track-row .btn {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+#layer-caption {
+  margin-top: 10px;
+}
+
+#layer-svg {
+  width: 100%;
+  height: 130px;
+  display: block;
+}
+
+/* ---------- embed mode (?embed): chrome-less view for iframes ---------- */
+body.embed #header,
+body.embed #prompt-bar,
+body.embed #gallery-panel {
+  display: none;
+}
+
+body.embed #app {
+  padding: 6px 8px;
+  gap: 6px;
+  min-height: 0;
+}
+
+#embed-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 11px;
+}
+
 /* ---------- pinned-cell bar race ---------- */
 #race-caption {
   margin-top: 10px;
