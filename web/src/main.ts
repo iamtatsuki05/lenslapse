@@ -1,15 +1,34 @@
 import './style.css'
-import { acquisitionMap, fmtStep, gridFromShard, loadIndex, loadModels, loadShard, trajectoryFromShard } from './data'
+import {
+  acquisitionMap,
+  fmtStep,
+  gridFromShard,
+  loadIndex,
+  loadModels,
+  loadShard,
+  nearestStep,
+  trajectoryFromShard,
+} from './data'
 import { LensGrid } from './grid'
 import { LiveEngine, fetchServerModels } from './live'
 import { setupManageModels } from './manage'
 import { renderRace } from './race'
 import { renderTrajectory } from './traj'
-import { EXAMPLE_TEXTS, buildGallery, buildSliderTicks, hideTooltip, setBadge, showAcqTooltip, showTooltip } from './ui'
+import {
+  EXAMPLE_TEXTS,
+  STORY_CARDS,
+  buildGallery,
+  buildSliderTicks,
+  hideTooltip,
+  setBadge,
+  showAcqTooltip,
+  showTooltip,
+} from './ui'
 import { legendGradient } from './color'
 import type { ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry } from './data'
 import type { PinnedCell } from './grid'
 import type { ProbeResult, ServerModel } from './live'
+import type { StoryCard } from './ui'
 
 const $ = <T extends Element = HTMLElement>(id: string) => document.getElementById(id) as unknown as T
 
@@ -23,6 +42,8 @@ const state = {
   stepIdx: 0,
   pinned: null as PinnedCell | null, // {layer, pos}
   gridView: 'top1' as 'top1' | 'acq', // 'acq' = acquisition map (when each cell first got its final answer)
+  logColor: false, // color cells by log10(p) — reveals early-training structure
+  compareId: null as string | null, // second model rendered in lockstep under the main grid
   steps: [] as number[],
   liveResult: null as LiveResult | null, // cached last live probe {text, step, grid, tokens}
   // trajectory sweep over every checkpoint for the current live prompt
@@ -97,8 +118,67 @@ const grid = new LensGrid($<HTMLCanvasElement>('lens-canvas'), {
 
 // change-flash bookkeeping: the previous step's top-1 ids, valid only for the same (model, prompt)
 let prevTop1: { key: string; ids: number[][] } | null = null
+let prevTop1B: { key: string; ids: number[][] } | null = null // same, for the compared model
 // data backing the acquisition-map tooltips
 let acqView: { steps: number[]; firstIdx: number[][] } | null = null
+
+// second grid for compare mode: hover works, pinning stays on the primary grid
+const compareGrid = new LensGrid($<HTMLCanvasElement>('compare-canvas'), {
+  onHover(cellInfo, evt) {
+    if (cellInfo) showTooltip($('tooltip'), cellInfo, evt!, compareGrid.tokens)
+    else hideTooltip($('tooltip'))
+  },
+  onPin() {
+    compareGrid.pinned = null
+    compareGrid.render()
+  },
+})
+
+/** Render the compared model's grid at its checkpoint nearest to the current step. */
+async function refreshCompare(): Promise<void> {
+  const wrap = $('compare-wrap')
+  if (!state.compareId || state.mode !== 'pre' || state.gridView === 'acq') {
+    wrap.hidden = true
+    return
+  }
+  const gen = viewGen
+  const cmpId = state.compareId
+  try {
+    const cmpIndex = await loadIndex(cmpId)
+    if (gen !== viewGen || cmpId !== state.compareId) return
+    const prompt = cmpIndex.prompts.find((p) => p.text === currentPrompt().text)
+    if (!prompt) {
+      wrap.hidden = true
+      status(`${modelInfo(cmpId)?.label ?? cmpId} has no precomputed data for this prompt — compare is off`)
+      return
+    }
+    const step = nearestStep(cmpIndex.steps, currentStep())
+    const shard = await loadShard(cmpId, prompt.id)
+    if (gen !== viewGen || cmpId !== state.compareId) return
+    const g = gridFromShard(shard, step)
+    if (!g) return
+    wrap.hidden = false
+    $('compare-title').textContent = modelInfo(cmpId)?.label ?? cmpId
+    $('compare-step').textContent = `step ${step.toLocaleString()} (nearest checkpoint)`
+    compareGrid.logScale = state.logColor
+    const key = `${cmpId}:${prompt.id}`
+    const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
+    compareGrid.setData(g, prompt.tokens, null)
+    if (prevTop1B && prevTop1B.key === key && prevTop1B.ids.length === ids.length) {
+      const changed = new Set<string>()
+      for (let li = 0; li < ids.length; li++)
+        for (let t = 0; t < ids[li].length; t++)
+          if (prevTop1B.ids[li]?.[t] !== undefined && prevTop1B.ids[li][t] !== ids[li][t]) changed.add(`${li}:${t}`)
+      compareGrid.flashCells(changed)
+    }
+    prevTop1B = { key, ids }
+  } catch (e) {
+    if (gen === viewGen) {
+      wrap.hidden = true
+      status(`compare failed: ${(e as Error).message}`)
+    }
+  }
+}
 
 function gridTokens(): string[] {
   return state.mode === 'live' && state.liveResult ? state.liveResult.tokens : (currentPrompt()?.tokens ?? [])
@@ -107,6 +187,8 @@ function gridTokens(): string[] {
 async function refreshGrid(): Promise<void> {
   if (state.mode === 'live') {
     if (!state.liveResult) return
+    $('compare-wrap').hidden = true // compare is precomputed-only
+    grid.logScale = state.logColor
     grid.setData(state.liveResult.grid, state.liveResult.tokens, state.pinned)
     updateRace()
     return
@@ -130,7 +212,9 @@ async function refreshGrid(): Promise<void> {
       state.pinned = null
       grid.pinned = null
     }
+    grid.logScale = false // ordinal acquisition colors, not probabilities
     grid.setData({ layers: acq.layers, positions: acq.positions, cells }, currentPrompt().tokens, state.pinned)
+    $('compare-wrap').hidden = true
     updateRace()
     return
   }
@@ -142,7 +226,9 @@ async function refreshGrid(): Promise<void> {
   }
   const key = `${state.model}:${state.promptId}`
   const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
+  grid.logScale = state.logColor
   grid.setData(g, currentPrompt().tokens, state.pinned)
+  refreshCompare()
   if (prevTop1 && prevTop1.key === key && prevTop1.ids.length === ids.length) {
     const changed = new Set<string>()
     for (let li = 0; li < ids.length; li++)
@@ -277,6 +363,7 @@ function startPlay(): void {
   playTimer = window.setInterval(() => {
     if (state.stepIdx >= state.steps.length - 1) {
       stopPlay()
+      if (KIOSK) window.setTimeout(kioskNext, 1800) // booth mode: cycle to the next story
       return
     }
     setStepIdx(state.stepIdx + 1)
@@ -291,9 +378,29 @@ function setStepIdx(idx: number): void {
 }
 
 function refreshPlayControls(): void {
+  const pre = state.mode === 'pre' && !!index?.prompts.length
   $<HTMLButtonElement>('play-btn').disabled = state.mode !== 'pre' || state.steps.length < 2
   // the map is meaningless for single-checkpoint models (every cell would read "step 0")
-  $<HTMLButtonElement>('acq-toggle').hidden = state.mode !== 'pre' || !index?.prompts.length || state.steps.length < 2
+  $<HTMLButtonElement>('acq-toggle').hidden = !pre || state.steps.length < 2
+  $<HTMLButtonElement>('log-toggle').hidden = !pre || state.gridView === 'acq'
+  $<HTMLSelectElement>('compare-select').hidden = !pre || state.gridView === 'acq'
+}
+
+function rebuildCompareSelect(): void {
+  const sel = $<HTMLSelectElement>('compare-select')
+  sel.replaceChildren()
+  const off = document.createElement('option')
+  off.value = ''
+  off.textContent = 'compare: off'
+  sel.appendChild(off)
+  for (const m of catalog!.models) {
+    if (m.id === state.model || m.serverOnly) continue
+    const opt = document.createElement('option')
+    opt.value = m.id
+    opt.textContent = `vs ${m.label ?? m.id}`
+    sel.appendChild(opt)
+  }
+  sel.value = state.compareId ?? ''
 }
 
 function setGridView(view: 'top1' | 'acq'): void {
@@ -304,9 +411,13 @@ function setGridView(view: 'top1' | 'acq'): void {
   $('grid-legend').innerHTML =
     view === 'acq'
       ? `<span>final answer first becomes top-1</span><span class="swatch" style="background:${legendGradient()}"></span><span>earliest → latest checkpoint</span>`
-      : `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
+      : state.logColor
+        ? `<span>lens top-1 probability (log)</span><span class="swatch" style="background:${legendGradient()}"></span><span>10⁻⁶ → 1</span>`
+        : `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
   prevTop1 = null
+  prevTop1B = null
   if (view !== 'acq') acqView = null
+  refreshPlayControls()
 }
 
 /* ---------- slider (index into steps, ticks positioned on log scale) ---------- */
@@ -435,6 +546,57 @@ async function runSweep(): Promise<void> {
   }
 }
 
+/** Jump to a curated story on the CURRENTLY selected model: precomputed when its shards carry
+ * the prompt, a live probe otherwise — at the model's nearest available step. */
+async function applyStory(card: StoryCard): Promise<void> {
+  stopPlay()
+  if (state.gridView === 'acq') setGridView('top1') // stories are step-specific views
+  const nearest = nearestStep(state.steps, card.step)
+  state.stepIdx = state.steps.indexOf(nearest)
+  $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
+  const p = index!.prompts.find((pr) => pr.text === card.text)
+  if (!p) {
+    clearTimeout(liveDebounce)
+    $<HTMLInputElement>('live-input').value = card.text
+    refreshStepUI()
+    await runLiveProbe(card.text)
+    if (card.pin === 'lastLayerLastPos' && state.liveResult?.text === card.text) {
+      state.pinned = { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
+      grid.pinned = { ...state.pinned }
+      refreshGrid()
+      refreshTrajectory()
+    }
+    return
+  }
+  viewGen++
+  clearTimeout(liveDebounce)
+  state.mode = 'pre'
+  state.promptId = p.id
+  $<HTMLSelectElement>('prompt-select').value = String(p.id)
+  state.pinned = card.pin === 'lastLayerLastPos' ? { layer: gridLayers() - 1, pos: p.tokens.length - 1 } : null
+  grid.pinned = state.pinned ? { ...state.pinned } : null
+  refreshBadgeAndTicks()
+  refreshStepUI()
+  syncHash()
+  refreshGrid()
+  refreshTrajectory()
+}
+
+/* ---------- kiosk mode (?kiosk): loop the time-lapse through the emergence stories ---------- */
+
+const KIOSK = new URLSearchParams(location.search).has('kiosk')
+let kioskIdx = 0
+
+function kioskNext(): void {
+  const card = STORY_CARDS[kioskIdx % STORY_CARDS.length]
+  kioskIdx++
+  void applyStory(card).then(() => {
+    if (state.mode !== 'pre' || state.steps.length < 2) return
+    setStepIdx(0)
+    startPlay()
+  })
+}
+
 function nearestLiveStep(step: number): number {
   const eng = engines.get(state.model!)
   if (eng?.server) return step // the probe server can load any suite checkpoint
@@ -453,6 +615,7 @@ function syncHash(): void {
   else if (index!.prompts.length) h.set('p', String(state.promptId))
   h.set('s', String(currentStep()))
   if (state.pinned) h.set('pin', `${state.pinned.layer},${state.pinned.pos}`)
+  if (state.compareId) h.set('cmp', state.compareId)
   try {
     history.replaceState(null, '', `#${h.toString()}`)
   } catch {
@@ -473,6 +636,10 @@ function readHash(): void {
     state.stepIdx = idx >= 0 ? idx : state.steps.length - 1
   } else {
     state.stepIdx = state.steps.length - 1
+  }
+  const cmp = h.get('cmp')
+  if (cmp && cmp !== state.model && catalog!.models.some((m) => m.id === cmp && !m.serverOnly)) {
+    state.compareId = cmp
   }
   if (h.has('q')) {
     // live-probe deep link: the pin (if any) belongs to the live grid, which does not exist yet
@@ -541,9 +708,11 @@ async function switchModel(id: string): Promise<void> {
   state.liveResult = null
   state.liveSweep = null // another model's trajectory must never render as this one's
   state.liveText = ''
+  if (state.compareId === id) state.compareId = null
   setGridView('top1')
   refreshPlayControls()
   rebuildPromptSelect()
+  rebuildCompareSelect()
   setupSliderRange()
   refreshStepUI()
   getEngine(id) // kick off engine init in the background
@@ -669,12 +838,26 @@ async function boot(): Promise<void> {
 
   setGridView('top1')
   refreshPlayControls()
+  rebuildCompareSelect()
   $('play-btn').addEventListener('click', () => (playTimer === undefined ? startPlay() : stopPlay()))
   $('acq-toggle').addEventListener('click', () => {
     if (state.mode !== 'pre') return
     stopPlay()
     setGridView(state.gridView === 'acq' ? 'top1' : 'acq')
     refreshGrid()
+  })
+  $('log-toggle').addEventListener('click', () => {
+    state.logColor = !state.logColor
+    $('log-toggle').classList.toggle('active', state.logColor)
+    setGridView(state.gridView) // refreshes the legend text for the new scale
+    refreshGrid()
+  })
+  const cmpSel = $<HTMLSelectElement>('compare-select')
+  cmpSel.addEventListener('change', () => {
+    state.compareId = cmpSel.value || null
+    prevTop1B = null
+    syncHash()
+    refreshCompare()
   })
   document.addEventListener('keydown', (e) => {
     if (e.code !== 'Space' || e.repeat) return
@@ -688,41 +871,7 @@ async function boot(): Promise<void> {
     else stopPlay()
   })
 
-  buildGallery($('gallery-cards'), async (card) => {
-    // the story applies to the CURRENTLY selected model: precomputed when its shards carry the
-    // prompt, a live probe otherwise — at the model's nearest available step
-    stopPlay()
-    if (state.gridView === 'acq') setGridView('top1') // stories are step-specific views
-    const nearest = state.steps.reduce((a, b) => (Math.abs(b - card.step) < Math.abs(a - card.step) ? b : a))
-    state.stepIdx = state.steps.indexOf(nearest)
-    $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
-    const p = index!.prompts.find((pr) => pr.text === card.text)
-    if (!p) {
-      clearTimeout(liveDebounce)
-      $<HTMLInputElement>('live-input').value = card.text
-      refreshStepUI()
-      await runLiveProbe(card.text)
-      if (card.pin === 'lastLayerLastPos' && state.liveResult?.text === card.text) {
-        state.pinned = { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
-        grid.pinned = { ...state.pinned }
-        refreshGrid()
-        refreshTrajectory()
-      }
-      return
-    }
-    viewGen++
-    clearTimeout(liveDebounce)
-    state.mode = 'pre'
-    state.promptId = p.id
-    $<HTMLSelectElement>('prompt-select').value = String(p.id)
-    state.pinned = card.pin === 'lastLayerLastPos' ? { layer: gridLayers() - 1, pos: p.tokens.length - 1 } : null
-    grid.pinned = state.pinned ? { ...state.pinned } : null
-    refreshBadgeAndTicks()
-    refreshStepUI()
-    syncHash()
-    refreshGrid()
-    refreshTrajectory()
-  })
+  buildGallery($('gallery-cards'), applyStory)
 
   $('live-btn').addEventListener('click', () => runLiveProbe($<HTMLInputElement>('live-input').value))
   $('traj-sweep').addEventListener('click', () => runSweep())
@@ -784,13 +933,14 @@ async function boot(): Promise<void> {
     } catch {
       /* storage unavailable */
     }
-    if (!played && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if ((!played || KIOSK) && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
       try {
         localStorage.setItem('lenslapse-played', '1')
       } catch {
         /* storage unavailable */
       }
-      startPlay()
+      if (KIOSK) kioskNext()
+      else startPlay()
     }
   }
 

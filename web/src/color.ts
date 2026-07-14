@@ -29,6 +29,13 @@ export function probColor(p: number): Rgb {
   ]
 }
 
+/** prob -> [0,1] on a log10 axis from 1e-6 to 1: near-uniform early-training distributions
+ * (p ~ vocab^-1 ~ 2e-5) become visibly structured instead of uniformly dark. */
+export function logProb01(p: number): number {
+  const floor = 1e-6
+  return (Math.log10(Math.min(Math.max(p, floor), 1)) + 6) / 6
+}
+
 export function cssColor(rgb: Rgb): string {
   return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
 }

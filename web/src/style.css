@@ -272,16 +272,38 @@ body {
   font-size: 11.5px;
 }
 
-#acq-toggle {
+.head-tools {
   margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.head-tools .btn,
+.head-tools select {
   font-size: 11.5px;
   padding: 3px 10px;
 }
 
-#acq-toggle.active {
+#acq-toggle.active,
+#log-toggle.active {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
+}
+
+#compare-wrap {
+  margin-top: 12px;
+  border-top: 1px dashed var(--panel-border);
+  padding-top: 8px;
+}
+
+.compare-head h2 {
+  color: var(--text-dim);
+}
+
+.cmp-scroll {
+  overflow-x: auto;
 }
 
 /* ---------- pinned-cell bar race ---------- */
@@ -537,6 +559,18 @@ body {
 #tooltip .tt-head {
   font-weight: 600;
   margin-bottom: 4px;
+}
+
+#tooltip .tt-bar {
+  width: 64px;
+}
+
+#tooltip .tt-bar i {
+  display: block;
+  height: 7px;
+  border-radius: 3px;
+  background: light-dark(#8b9bff, #6b7dff);
+  opacity: 0.85;
 }
 
 /* ---------- models dialog (probe-server management) ---------- */

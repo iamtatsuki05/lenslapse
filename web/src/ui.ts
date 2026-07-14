@@ -6,10 +6,12 @@ import type { Prompt } from './data'
 
 export function showTooltip(el: HTMLElement, cellInfo: CellInfo, evt: MouseEvent, tokens: string[]): void {
   const { layer, pos, cell } = cellInfo
+  const maxP = cell.top[0]?.[1] || 1
   const rows = cell.top
     .map(
       ([tok, p]) =>
-        `<tr><td>${escapeHtml(displayToken(tok))}</td><td>${(p * 100).toFixed(p >= 0.1 ? 1 : 2)}%</td></tr>`
+        `<tr><td>${escapeHtml(displayToken(tok))}</td><td>${(p * 100).toFixed(p >= 0.1 ? 1 : 2)}%</td>` +
+        `<td class="tt-bar"><i style="width:${Math.max(2, (p / maxP) * 100)}%"></i></td></tr>`
     )
     .join('')
   el.innerHTML = `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(
@@ -110,7 +112,7 @@ export const EXAMPLE_TEXTS = [
   'Mr. and Mrs. Dursley, of number four, Privet Drive, were proud to say that they were perfectly',
 ]
 
-const STORY_CARDS: StoryCard[] = [
+export const STORY_CARDS: StoryCard[] = [
   {
     tag: 'fact acquisition',
     title: 'When does the model learn “Tokyo”?',

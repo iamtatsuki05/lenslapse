@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { acquisitionMap, fmtStep } from '../src/data'
+import { acquisitionMap, fmtStep, nearestStep } from '../src/data'
+import { logProb01 } from '../src/color'
 import type { Shard } from '../src/data'
 
 // 1 layer x 2 positions, steps 0/10/20. Cell 0: B,A,A -> final A first at step 10.
@@ -40,5 +41,23 @@ describe('fmtStep', () => {
     expect(fmtStep(1000)).toBe('1k')
     expect(fmtStep(2738)).toBe('2.7k')
     expect(fmtStep(143000)).toBe('143k')
+  })
+})
+
+describe('nearestStep', () => {
+  it('keeps a compared model in lockstep with the closest checkpoint', () => {
+    expect(nearestStep([0, 1000, 8000, 32000], 8000)).toBe(8000)
+    expect(nearestStep([0, 1000, 8000, 32000], 12000)).toBe(8000)
+    expect(nearestStep([0, 1000, 8000, 32000], 999999)).toBe(32000)
+  })
+})
+
+describe('logProb01', () => {
+  it('maps the log axis 1e-6..1 to 0..1 and reveals near-uniform distributions', () => {
+    expect(logProb01(1)).toBe(1)
+    expect(logProb01(1e-6)).toBe(0)
+    expect(logProb01(0)).toBe(0) // floored, never -Infinity
+    expect(logProb01(2e-5)).toBeGreaterThan(0.2) // ~vocab^-1 is visibly above the floor
+    expect(logProb01(1e-3)).toBeCloseTo(0.5, 5)
   })
 })

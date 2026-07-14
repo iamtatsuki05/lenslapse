@@ -13,8 +13,8 @@
       content="LensLapse: a fully in-browser time-lapse of the logit lens across Pythia training checkpoints."
     />
     <title>LensLapse — watch a language model learn, layer by layer</title>
-    <script type="module" crossorigin src="./assets/main-SGOlGyxw.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/main-BAkEtm-r.css">
+    <script type="module" crossorigin src="./assets/main-g0ER6tK2.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/main-CJF_j0px.css">
   </head>
   <body>
     <div id="app">
@@ -79,14 +79,29 @@
           <div class="panel-head">
             <h2>Logit-lens grid</h2>
             <span class="hint">cell = top-1 lens prediction · hover: top-10 · click: pin for trajectory</span>
-            <button id="acq-toggle" class="btn" hidden title="When did each cell first predict its final answer?">
-              ⏱ acquisition map
-            </button>
+            <span class="head-tools">
+              <select id="compare-select" class="btn" hidden title="Render a second model's grid in lockstep — scale × time interactively"></select>
+              <button id="log-toggle" class="btn" hidden title="Color by log probability — reveals early-training structure">
+                ㏒ log color
+              </button>
+              <button id="acq-toggle" class="btn" hidden title="When did each cell first predict its final answer?">
+                ⏱ acquisition map
+              </button>
+            </span>
           </div>
           <div id="grid-scroll">
             <canvas id="lens-canvas"></canvas>
           </div>
           <div id="grid-legend" class="legend"></div>
+          <div id="compare-wrap" hidden>
+            <div class="panel-head compare-head">
+              <h2 id="compare-title">—</h2>
+              <span id="compare-step" class="hint"></span>
+            </div>
+            <div class="cmp-scroll">
+              <canvas id="compare-canvas"></canvas>
+            </div>
+          </div>
         </section>
 
         <aside id="side-panels">

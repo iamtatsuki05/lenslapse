@@ -113,6 +113,11 @@ export function gridFromShard(shard: Shard, step: number): GridData | null {
   return { layers: cells.length, positions: cells[0].length, cells }
 }
 
+/** The step in `steps` closest to `step` (used to keep a compared model in lockstep). */
+export function nearestStep(steps: number[], step: number): number {
+  return steps.reduce((a, b) => (Math.abs(b - step) < Math.abs(a - step) ? b : a))
+}
+
 /** Compact step label for grid cells: 512 → "512", 8000 → "8k", 2738 → "2.7k". */
 export function fmtStep(s: number): string {
   if (s < 1000) return String(s)
