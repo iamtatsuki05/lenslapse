@@ -155,6 +155,9 @@ async function refreshCompare(): Promise<void> {
     const step = nearestStep(cmpIndex.steps, currentStep())
     const shard = await loadShard(cmpId, prompt.id)
     if (gen !== viewGen || cmpId !== state.compareId) return
+    // the acq toggle does not bump viewGen — re-check the entry conditions after every await,
+    // or a slow first shard load could un-hide compare underneath the acquisition map
+    if (state.mode !== 'pre' || state.gridView === 'acq') return
     const g = gridFromShard(shard, step)
     if (!g) return
     wrap.hidden = false
@@ -186,8 +189,8 @@ function gridTokens(): string[] {
 
 async function refreshGrid(): Promise<void> {
   if (state.mode === 'live') {
+    $('compare-wrap').hidden = true // compare is precomputed-only — hide even before the first probe lands
     if (!state.liveResult) return
-    $('compare-wrap').hidden = true // compare is precomputed-only
     grid.logScale = state.logColor
     grid.setData(state.liveResult.grid, state.liveResult.tokens, state.pinned)
     updateRace()
