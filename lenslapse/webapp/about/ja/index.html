@@ -58,7 +58,7 @@
             WebGPU/WASM の ONNX 推論により、ブラウザの中でその場で解析されます。サーバーも API
             キーも不要で、プロンプトが端末の外に出ることはありません。ブラウザ内 lens は評価スイート上で fp32 PyTorch と
             top-1 一致率 100%(int8 量子化では最悪 52% まで低下)、ウォーム状態のプローブは Chromium/WebKit において 3
-            つのモデルサイズ(14M〜160M)で 65〜340&nbsp;ms で完了します。
+            つのモデルサイズ(14M〜160M)で 63〜316&nbsp;ms で完了します。
           </p>
         </div>
       </section>
@@ -115,9 +115,9 @@
           </div>
           <div class="card">
             <span class="card-icon" aria-hidden="true">⌨</span>
-            <h3>端までスクリプタブル</h3>
+            <h3>隅々までスクリプタブル</h3>
             <p>
-              UI の全操作に CLI の対応物がある(<code>lenslapse probe</code>/<code>trace</code>/<code>models</code>)。
+              主要な操作には CLI の対応物がある(<code>lenslapse probe</code>/<code>trace</code>/<code>models</code>)。
               アプリからは現在のビューを再現する CLI / cURL コマンドをコピーでき、任意のトークンを学習過程にわたって
               追跡できる。permalink で共有でき、<code>?embed</code> で任意のページに生きたグリッドを埋め込める。
             </p>
