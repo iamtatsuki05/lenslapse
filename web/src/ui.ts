@@ -31,6 +31,29 @@ export function hideTooltip(el: HTMLElement): void {
   el.hidden = true
 }
 
+/** Tooltip for the acquisition-map view: the cell's final answer and when it first became top-1. */
+export function showAcqTooltip(
+  el: HTMLElement,
+  cellInfo: CellInfo,
+  evt: MouseEvent,
+  tokens: string[],
+  firstStep: number
+): void {
+  const { layer, pos, cell } = cellInfo
+  const [tok, p] = cell.top[0]
+  el.innerHTML = `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(
+    displayToken(tokens[pos] ?? '')
+  )}”</div><table><tr><td>final top-1</td><td>${escapeHtml(displayToken(tok))} (${(p * 100).toFixed(1)}%)</td></tr><tr><td>first top-1 at</td><td>step ${firstStep.toLocaleString()}</td></tr></table>`
+  el.hidden = false
+  const pad = 12
+  let x = evt.clientX + pad
+  let y = evt.clientY + pad
+  if (x + el.offsetWidth > innerWidth - 4) x = evt.clientX - el.offsetWidth - pad
+  if (y + el.offsetHeight > innerHeight - 4) y = evt.clientY - el.offsetHeight - pad
+  el.style.left = `${x}px`
+  el.style.top = `${y}px`
+}
+
 export function buildSliderTicks(container: HTMLElement, steps: number[], liveSteps: number[], maxStep: number): void {
   container.replaceChildren()
   const live = new Set(liveSteps)

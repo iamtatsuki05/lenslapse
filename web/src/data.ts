@@ -113,6 +113,55 @@ export function gridFromShard(shard: Shard, step: number): GridData | null {
   return { layers: cells.length, positions: cells[0].length, cells }
 }
 
+/** Compact step label for grid cells: 512 → "512", 8000 → "8k", 2738 → "2.7k". */
+export function fmtStep(s: number): string {
+  if (s < 1000) return String(s)
+  const k = s / 1000
+  return `${Number.isInteger(k) ? k : Number(k.toFixed(1))}k`
+}
+
+export interface AcquisitionMap {
+  layers: number
+  positions: number
+  /** index into `steps` of the first step where the cell's FINAL top-1 is already its top-1 */
+  firstIdx: number[][]
+  /** the final answer per cell: [token, final prob, id] */
+  finalTop: TopEntry[][]
+}
+
+/**
+ * When did each cell first predict its final answer? For every (layer, pos), the earliest step
+ * at which the FINAL checkpoint's top-1 token is already the cell's top-1 (the final step
+ * itself trivially qualifies, so the scan always terminates).
+ */
+export function acquisitionMap(shard: Shard, steps: number[]): AcquisitionMap | null {
+  const last = shard.steps[String(steps.at(-1))]
+  if (!last) return null
+  const layers = last.top.length
+  const positions = last.top[0].length
+  const vocab = shard.vocab
+  const firstIdx: number[][] = []
+  const finalTop: TopEntry[][] = []
+  for (let li = 0; li < layers; li++) {
+    firstIdx.push([])
+    finalTop.push([])
+    for (let t = 0; t < positions; t++) {
+      const [finalId, finalP] = last.top[li][t][0]
+      finalTop[li].push([vocab[String(finalId)] ?? '?', finalP, finalId])
+      let idx = steps.length - 1
+      for (let si = 0; si < steps.length; si++) {
+        const e = shard.steps[String(steps[si])]
+        if (e && e.top[li][t][0][0] === finalId) {
+          idx = si
+          break
+        }
+      }
+      firstIdx[li].push(idx)
+    }
+  }
+  return { layers, positions, firstIdx, finalTop }
+}
+
 /**
  * Trajectory of target tokens for a pinned (layer, pos) across all steps present in the shard.
  * Returns [{id, token, points: [[step, prob, rank], ...]}].

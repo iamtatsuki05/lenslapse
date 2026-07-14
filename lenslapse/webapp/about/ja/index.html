@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⧖</text></svg>"
+    />
+    <meta
+      name="description"
+      content="LensLapse: 訓練チェックポイントを横断するブラウザ内 logit lens。AACL-IJCNLP 2026 System Demonstrations 投稿論文のプロジェクトページ(日本語版)。"
+    />
+    <title>LensLapse — プロジェクトページ</title>
+    <link rel="stylesheet" crossorigin href="../../assets/about-7UHfnYhE.css">
+  </head>
+  <body>
+    <div class="page">
+      <nav class="top-bar" aria-label="言語切替">
+        <a class="chip" href="../" lang="en" hreflang="en">English</a>
+      </nav>
+
+      <header class="hero">
+        <span class="venue">AACL-IJCNLP 2026 System Demonstrations · 投稿中</span>
+        <div class="logo" aria-hidden="true">⧖</div>
+        <h1 lang="en">
+          LensLapse: Watching Language Models Learn with an In-Browser Logit Lens over Training Checkpoints
+        </h1>
+        <p class="authors">Tatsuki Okada</p>
+        <p class="affiliation">奈良先端科学技術大学院大学(NAIST)</p>
+        <p class="tagline">
+          Pythia の公開訓練チェックポイントをスライダーで行き来し、次トークン予測がノイズから知識へと結晶していく過程を、層ごとに、バックエンドなしで眺める。
+        </p>
+        <div class="actions">
+          <a class="action-btn primary" href="../../">🚀 ライブデモ</a>
+          <a class="action-btn" href="https://github.com/iamtatsuki05/lenslapse" target="_blank" rel="noopener"
+            >💻 コード</a
+          >
+          <a
+            class="action-btn"
+            href="https://huggingface.co/iamtatsuki05/lenslapse-onnx"
+            target="_blank"
+            rel="noopener"
+            >🤗 チェックポイント</a
+          >
+        </div>
+      </header>
+
+      <section id="abstract">
+        <h2>概要</h2>
+        <div class="abstract">
+          <p>
+            logit lens は、transformer の次トークン予測が層を経てどう形づくられるかを覗く定番の手法です。しかし既存のホスト型ツールが見せてくれるのは、学習を終えた
+            1 つのモデルだけでした。LensLapse は訓練時間そのものを、トークンレベル解釈可能性の第一級の軸にします。スライダーで
+            Pythia-70M の公開チェックポイント 38 個を行き来すると、層ごと・位置ごとの lens
+            予測が初期の頻度バイアスから事実知識へと結晶していく様子を観察できます。厳選プロンプトは事前計算済みデータから即座に描画され、自由入力のプロンプトは
+            WebGPU/WASM の ONNX 推論により、ブラウザの中でその場で解析されます。サーバーも API
+            キーも不要で、プロンプトが端末の外に出ることはありません。ブラウザ内 lens は評価スイート上で fp32 PyTorch と
+            top-1 一致率 100%(int8 量子化では最悪 52% まで低下)、ウォーム状態のプローブは Chromium/WebKit において 3
+            つのモデルサイズ(14M〜160M)で 65〜340&nbsp;ms で完了します。
+          </p>
+        </div>
+      </section>
+
+      <section id="highlights">
+        <h2>特徴</h2>
+        <div class="cards">
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">⧖</span>
+            <h3>logit lens に時間軸を</h3>
+            <p>
+              既存の lens ツールが見るのは完成後のモデル 1 つ。LensLapse は Pythia-70M の 38 チェックポイント(step
+              0〜143k)を横断し、正確な P(token)
+              軌跡を描く。一度覚え、忘れ、また覚え直すような、単調でない事実獲得の過程まで見える。
+            </p>
+          </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">🌐</span>
+            <h3>完全ブラウザ内・ゼロバックエンド</h3>
+            <p>
+              自由入力プロンプトは onnxruntime-web(WebGPU、非対応環境では WASM)による 1 回の forward
+              パスで解析。静的サイト + HF Hub
+              上の重みという構成なので、ホスティング費用ゼロのまま同時利用者数に上限がなく、デモが朽ちない。
+            </p>
+          </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">📦</span>
+            <h3>pip 一発で自分のチェックポイントを</h3>
+            <p>
+              <code>pip install</code> して <code>lenslapse server</code> を実行すると、アプリ本体とプローブ API
+              がローカルの 1 ポートで立ち上がる。HF Hub のモデルもローカルの Trainer 出力も、ONNX
+              変換や設定ファイルなしにそのまま探索できる。レシピはアーキテクチャ非依存で、GPT-NeoX・GPT-2・Llama 系
+              RMSNorm がパリティ検査を通過済み。
+            </p>
+          </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">✅</span>
+            <h3>検証済みの忠実度</h3>
+            <p>
+              設計上 lens(h<sub>L</sub>) はモデルの logits
+              と一致し、エクスポート時にチェックポイントごとに検証される。fp16 の重み格納は評価スイート上で fp32
+              PyTorch と top-1 一致率 100% を保つ。int8 動的量子化は 52% まで落ちるため採用していない。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section id="screenshots">
+        <h2>スクリーンショット</h2>
+        <div class="shots">
+          <figure>
+            <div class="frame">
+              <img
+                src="../../about/fig1-ui.png"
+                alt="LensLapse の画面全体。logit-lens グリッド、訓練ステップのスライダー、軌跡パネル、emergence stories が並ぶ"
+                width="2880"
+                height="2020"
+              />
+            </div>
+            <figcaption>
+              step 8,000(Pythia-70M)での画面全体。左に logit-lens
+              グリッド、上に対数スケールの訓練ステップスライダー、右にピン留めしたセルの確率軌跡と、見どころのプリセットに一気に飛べる
+              emergence stories。
+            </figcaption>
+          </figure>
+          <figure>
+            <div class="frame">
+              <img
+                src="../../about/fig-grid-step8000.png"
+                alt="訓練ステップ 8,000 の logit-lens グリッド。最終層で Tokyo が初めて top-1 に到達している"
+                width="1340"
+                height="430"
+                loading="lazy"
+              />
+            </div>
+            <figcaption>
+              「The capital of Japan is the city of」に対する step 8,000 のグリッド。最終層で「&nbsp;Tokyo」が初めて
+              top-1 に到達する一方、下位層はまだ入力の繰り返しや一般的な続きを予測している。
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="how">
+        <h2>仕組み</h2>
+        <p>
+          各チェックポイントは一度だけ ONNX のペアに変換します。<strong>backbone</strong>
+          は埋め込みと各ブロック直後の(最終 layer norm 適用前の)残差ストリームを返し、<strong>lens ヘッド</strong
+          >(最終 layer norm +
+          unembedding)は任意の層の隠れ状態に適用できます。厳選プロンプトは fp32 PyTorch で事前計算した静的 JSON
+          として配信し、自由入力プロンプトはブラウザ内でトークナイズして 1 回の forward パスで解析。全 (layer,
+          position) の隠れ状態を 1 回のバッチ行列積で lens ヘッドに通します。重みは fp16
+          で保存し、セッション読み込み時に fp32 へキャストします。
+        </p>
+        <pre>
+Pythia checkpoint (HF Hub, revision step{N})
+   ├─ backbone.f16.onnx   input_ids → hidden states [L+1, T, H]
+   ├─ lens.f16.onnx       hidden [N, H] → logits [N, V]
+   └─ precompute          → static JSON shards (top-10 per cell + trajectories)
+
+browser (static site, no backend)
+   ├─ precomputed mode: JSON shard → canvas grid + SVG trajectories
+   └─ live mode: onnxruntime-web (WebGPU → WASM) + transformers.js tokenizer</pre
+        >
+      </section>
+
+      <section id="bibtex">
+        <h2>BibTeX</h2>
+        <pre>
+@misc{okada2026lenslapse,
+  title  = {LensLapse: Watching Language Models Learn with an In-Browser Logit Lens over Training Checkpoints},
+  author = {Tatsuki Okada},
+  year   = {2026},
+  note   = {AACL-IJCNLP 2026 System Demonstrations (submitted)},
+  url    = {https://github.com/iamtatsuki05/lenslapse}
+}</pre
+        >
+      </section>
+
+      <footer>
+        <p>コードは MIT License で公開。Pythia のチェックポイントは EleutherAI によるもの(Apache-2.0)です。</p>
+        <p>
+          <a href="../../">ライブデモ</a> · <a href="https://github.com/iamtatsuki05/lenslapse">GitHub</a> ·
+          <a href="../" lang="en" hreflang="en">English version</a>
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>

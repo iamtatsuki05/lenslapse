@@ -1,12 +1,13 @@
 import './style.css'
-import { gridFromShard, loadIndex, loadModels, loadShard, trajectoryFromShard } from './data'
+import { acquisitionMap, fmtStep, gridFromShard, loadIndex, loadModels, loadShard, trajectoryFromShard } from './data'
 import { LensGrid } from './grid'
 import { LiveEngine, fetchServerModels } from './live'
 import { setupManageModels } from './manage'
+import { renderRace } from './race'
 import { renderTrajectory } from './traj'
-import { EXAMPLE_TEXTS, buildGallery, buildSliderTicks, hideTooltip, setBadge, showTooltip } from './ui'
+import { EXAMPLE_TEXTS, buildGallery, buildSliderTicks, hideTooltip, setBadge, showAcqTooltip, showTooltip } from './ui'
 import { legendGradient } from './color'
-import type { ModelCatalog, ModelEntry, ModelIndex, Prompt } from './data'
+import type { ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry } from './data'
 import type { PinnedCell } from './grid'
 import type { ProbeResult, ServerModel } from './live'
 
@@ -21,6 +22,7 @@ const state = {
   liveText: '',
   stepIdx: 0,
   pinned: null as PinnedCell | null, // {layer, pos}
+  gridView: 'top1' as 'top1' | 'acq', // 'acq' = acquisition map (when each cell first got its final answer)
   steps: [] as number[],
   liveResult: null as LiveResult | null, // cached last live probe {text, step, grid, tokens}
   // trajectory sweep over every checkpoint for the current live prompt
@@ -76,15 +78,27 @@ function currentPrompt(): Prompt {
 
 const grid = new LensGrid($<HTMLCanvasElement>('lens-canvas'), {
   onHover(cellInfo, evt) {
-    if (cellInfo) showTooltip($('tooltip'), cellInfo, evt!, gridTokens())
-    else hideTooltip($('tooltip'))
+    if (!cellInfo) {
+      hideTooltip($('tooltip'))
+      return
+    }
+    if (state.mode === 'pre' && state.gridView === 'acq' && acqView) {
+      const firstStep = acqView.steps[acqView.firstIdx[cellInfo.layer]?.[cellInfo.pos] ?? acqView.steps.length - 1]
+      showAcqTooltip($('tooltip'), cellInfo, evt!, gridTokens(), firstStep)
+    } else showTooltip($('tooltip'), cellInfo, evt!, gridTokens())
   },
   onPin(pinned) {
     state.pinned = pinned ? { layer: pinned.layer, pos: pinned.pos } : null
     syncHash()
     refreshTrajectory()
+    updateRace()
   },
 })
+
+// change-flash bookkeeping: the previous step's top-1 ids, valid only for the same (model, prompt)
+let prevTop1: { key: string; ids: number[][] } | null = null
+// data backing the acquisition-map tooltips
+let acqView: { steps: number[]; firstIdx: number[][] } | null = null
 
 function gridTokens(): string[] {
   return state.mode === 'live' && state.liveResult ? state.liveResult.tokens : (currentPrompt()?.tokens ?? [])
@@ -94,18 +108,80 @@ async function refreshGrid(): Promise<void> {
   if (state.mode === 'live') {
     if (!state.liveResult) return
     grid.setData(state.liveResult.grid, state.liveResult.tokens, state.pinned)
+    updateRace()
     return
   }
   const gen = viewGen
   const shard = await loadShard(state.model!, state.promptId)
   if (gen !== viewGen) return
+  if (state.gridView === 'acq') {
+    const acq = acquisitionMap(shard, index!.steps)
+    if (!acq) return
+    acqView = { steps: index!.steps, firstIdx: acq.firstIdx }
+    const span = Math.max(1, index!.steps.length - 1)
+    const cells = acq.firstIdx.map((row, li) =>
+      row.map((si, t) => ({
+        token: fmtStep(index!.steps[si]),
+        prob: si / span, // color = when the final answer arrived (early → dark, late → bright)
+        top: [acq.finalTop[li][t]],
+      }))
+    )
+    if (state.pinned && (state.pinned.layer >= acq.layers || state.pinned.pos >= acq.positions)) {
+      state.pinned = null
+      grid.pinned = null
+    }
+    grid.setData({ layers: acq.layers, positions: acq.positions, cells }, currentPrompt().tokens, state.pinned)
+    updateRace()
+    return
+  }
   const g = gridFromShard(shard, currentStep())
   if (!g) return
   if (state.pinned && (state.pinned.layer >= g.layers || state.pinned.pos >= g.positions)) {
     state.pinned = null
     grid.pinned = null
   }
+  const key = `${state.model}:${state.promptId}`
+  const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
   grid.setData(g, currentPrompt().tokens, state.pinned)
+  if (prevTop1 && prevTop1.key === key && prevTop1.ids.length === ids.length) {
+    const changed = new Set<string>()
+    for (let li = 0; li < ids.length; li++)
+      for (let t = 0; t < ids[li].length; t++)
+        if (prevTop1.ids[li]?.[t] !== undefined && prevTop1.ids[li][t] !== ids[li][t]) changed.add(`${li}:${t}`)
+    grid.flashCells(changed)
+  }
+  prevTop1 = { key, ids }
+  updateRace()
+}
+
+/** The pinned cell's top-10 as an animated leaderboard (below the trajectory chart). */
+async function updateRace(): Promise<void> {
+  const bars = $('race-bars')
+  const cap = $('race-caption')
+  const pin = state.pinned
+  let top: TopEntry[] | null = null
+  let goldId: number | undefined
+  if (pin && state.mode === 'live') {
+    top = state.liveResult?.grid.cells[pin.layer]?.[pin.pos]?.top ?? null
+  } else if (pin && index!.prompts.length) {
+    const gen = viewGen
+    const shard = await loadShard(state.model!, state.promptId) // promise-cached: instant after first load
+    if (gen !== viewGen) return
+    top = gridFromShard(shard, currentStep())?.cells[pin.layer]?.[pin.pos]?.top ?? null
+    const p = currentPrompt()
+    if (pin.pos === p.tokens.length - 1) goldId = p.gold_id
+  }
+  if (!top) {
+    bars.hidden = true
+    cap.hidden = true
+    bars.replaceChildren()
+    return
+  }
+  cap.hidden = false
+  cap.textContent = `top-10 race at the pinned cell — step ${
+    state.mode === 'live' ? (state.liveResult?.step ?? currentStep()).toLocaleString() : currentStep().toLocaleString()
+  }`
+  renderRace(bars, top, { goldId })
 }
 
 async function refreshTrajectory(): Promise<void> {
@@ -176,6 +252,61 @@ function refreshBadgeAndTicks(): void {
   buildSliderTicks($('slider-ticks'), state.steps, live, state.steps.at(-1)!)
 }
 
+/* ---------- time-lapse playback ---------- */
+
+const PLAY_MS = 220 // per checkpoint: 38 steps ≈ 8 s — slow enough to read, fast enough to feel like a time-lapse
+let playTimer: number | undefined
+
+function stopPlay(): void {
+  if (playTimer === undefined) return
+  window.clearInterval(playTimer)
+  playTimer = undefined
+  const b = $<HTMLButtonElement>('play-btn')
+  b.textContent = '▶'
+  b.setAttribute('aria-pressed', 'false')
+}
+
+function startPlay(): void {
+  if (playTimer !== undefined || state.mode !== 'pre' || state.steps.length < 2) return
+  if (state.gridView === 'acq') setGridView('top1') // the map aggregates time; playing means watching steps
+  if (state.stepIdx >= state.steps.length - 1) setStepIdx(0)
+  const b = $<HTMLButtonElement>('play-btn')
+  b.textContent = '⏸'
+  b.setAttribute('aria-pressed', 'true')
+  playTimer = window.setInterval(() => {
+    if (state.stepIdx >= state.steps.length - 1) {
+      stopPlay()
+      return
+    }
+    setStepIdx(state.stepIdx + 1)
+  }, PLAY_MS)
+}
+
+function setStepIdx(idx: number): void {
+  state.stepIdx = idx
+  $<HTMLInputElement>('step-slider').value = String(idx)
+  refreshStepUI()
+  onStepChanged()
+}
+
+function refreshPlayControls(): void {
+  $<HTMLButtonElement>('play-btn').disabled = state.mode !== 'pre' || state.steps.length < 2
+  $<HTMLButtonElement>('acq-toggle').hidden = state.mode !== 'pre' || !index?.prompts.length
+}
+
+function setGridView(view: 'top1' | 'acq'): void {
+  state.gridView = view
+  const btn = $<HTMLButtonElement>('acq-toggle')
+  btn.classList.toggle('active', view === 'acq')
+  btn.textContent = view === 'acq' ? '▦ top-1 view' : '⏱ acquisition map'
+  $('grid-legend').innerHTML =
+    view === 'acq'
+      ? `<span>final answer first becomes top-1</span><span class="swatch" style="background:${legendGradient()}"></span><span>step 0 → ${state.steps.at(-1)?.toLocaleString() ?? ''}</span>`
+      : `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
+  prevTop1 = null
+  if (view !== 'acq') acqView = null
+}
+
 /* ---------- slider (index into steps, ticks positioned on log scale) ---------- */
 
 function setupSliderRange(): void {
@@ -205,6 +336,7 @@ function onStepChanged(): void {
 let probeSeq = 0 // only the latest probe run controls the button / error status
 async function runLiveProbe(text: string): Promise<void> {
   if (!text.trim()) return
+  stopPlay()
   const gen = ++viewGen
   const run = ++probeSeq
   const engine = getEngine()
@@ -224,6 +356,8 @@ async function runLiveProbe(text: string): Promise<void> {
     const res = await engine.probe(text, step, status)
     if (gen !== viewGen) return // user switched views while the probe ran
     state.mode = 'live'
+    if (state.gridView === 'acq') setGridView('top1') // the map needs all-step shards, which live mode lacks
+    refreshPlayControls()
     if (state.liveSweep && state.liveSweep.text !== text) state.liveSweep = null
     state.liveText = text
     state.liveResult = { ...res, text, step }
@@ -377,6 +511,7 @@ function rebuildPromptSelect(): void {
 
 async function switchModel(id: string): Promise<void> {
   const gen = ++viewGen
+  stopPlay()
   clearTimeout(liveDebounce)
   const prev = state.model
   let nextIndex: ModelIndex
@@ -399,6 +534,8 @@ async function switchModel(id: string): Promise<void> {
   state.liveResult = null
   state.liveSweep = null // another model's trajectory must never render as this one's
   state.liveText = ''
+  setGridView('top1')
+  refreshPlayControls()
   rebuildPromptSelect()
   setupSliderRange()
   refreshStepUI()
@@ -487,6 +624,7 @@ async function boot(): Promise<void> {
 
   const sel = $<HTMLSelectElement>('prompt-select')
   sel.addEventListener('change', () => {
+    stopPlay()
     if (sel.value.startsWith('ex:')) {
       // live-only model: the selected example fires a live probe on the current model
       const text = EXAMPLE_TEXTS[Number(sel.value.slice(3))]
@@ -508,10 +646,12 @@ async function boot(): Promise<void> {
     refreshTrajectory()
   })
 
+  const deepLinked = location.hash.length > 1
   readHash()
   rebuildPromptSelect()
   const slider = $<HTMLInputElement>('step-slider')
   slider.addEventListener('input', () => {
+    stopPlay()
     state.stepIdx = Number(slider.value)
     refreshStepUI()
     onStepChanged()
@@ -520,12 +660,30 @@ async function boot(): Promise<void> {
   refreshStepUI()
   getEngine(state.model!) // engine init is non-blocking for first paint
 
-  $('grid-legend').innerHTML =
-    `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
+  setGridView('top1')
+  refreshPlayControls()
+  $('play-btn').addEventListener('click', () => (playTimer === undefined ? startPlay() : stopPlay()))
+  $('acq-toggle').addEventListener('click', () => {
+    if (state.mode !== 'pre') return
+    stopPlay()
+    setGridView(state.gridView === 'acq' ? 'top1' : 'acq')
+    refreshGrid()
+  })
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return
+    const t = e.target as HTMLElement | null
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+    if ($<HTMLDialogElement>('models-dialog').open) return
+    e.preventDefault()
+    if (playTimer === undefined) startPlay()
+    else stopPlay()
+  })
 
   buildGallery($('gallery-cards'), async (card) => {
     // the story applies to the CURRENTLY selected model: precomputed when its shards carry the
     // prompt, a live probe otherwise — at the model's nearest available step
+    stopPlay()
+    if (state.gridView === 'acq') setGridView('top1') // stories are step-specific views
     const nearest = state.steps.reduce((a, b) => (Math.abs(b - card.step) < Math.abs(a - card.step) ? b : a))
     state.stepIdx = state.steps.indexOf(nearest)
     $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
@@ -599,6 +757,31 @@ async function boot(): Promise<void> {
     status(index.prompts.length ? '' : 'this model is live-only — type a prompt below and hit Live probe')
   } catch (e) {
     status(`failed to render precomputed data: ${(e as Error).message}`)
+  }
+
+  // first-load affordances (skipped for permalinks, which encode a specific view): pin the
+  // classic cell so the trajectory panel is never an empty box, and play the time-lapse once
+  // for first-time visitors — the product IS the motion, so show it without asking
+  if (!deepLinked && state.mode === 'pre' && index.prompts.length && grid.grid) {
+    state.pinned = { layer: grid.grid.layers - 1, pos: currentPrompt().tokens.length - 1 }
+    grid.pinned = { ...state.pinned }
+    grid.render()
+    await refreshTrajectory()
+    updateRace()
+    let played = false
+    try {
+      played = localStorage.getItem('lenslapse-played') === '1'
+    } catch {
+      /* storage unavailable */
+    }
+    if (!played && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      try {
+        localStorage.setItem('lenslapse-played', '1')
+      } catch {
+        /* storage unavailable */
+      }
+      startPlay()
+    }
   }
 
   // deep-linked live probe

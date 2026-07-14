@@ -33,6 +33,8 @@ export class LensGrid {
   declare onHover: LensGridCallbacks['onHover']
   declare onPin: LensGridCallbacks['onPin']
   declare dark: MediaQueryList
+  declare flash: Set<string> | null // "layer:pos" cells whose top-1 just changed (scrub/play)
+  declare flashTimer: number | undefined
 
   constructor(canvas: HTMLCanvasElement, { onHover, onPin }: LensGridCallbacks) {
     this.canvas = canvas
@@ -40,6 +42,8 @@ export class LensGrid {
     this.grid = null
     this.tokens = []
     this.pinned = null // {layer, pos}
+    this.flash = null
+    this.flashTimer = undefined
     this.onHover = onHover
     this.onPin = onPin
     this.dark = matchMedia('(prefers-color-scheme: dark)')
@@ -64,6 +68,20 @@ export class LensGrid {
     this.grid = grid
     this.tokens = tokens
     this.pinned = pinned
+    this.flash = null // stale highlights must not outline cells of a different grid
+    this.render()
+  }
+
+  /** Briefly outline cells (e.g. whose top-1 changed since the previous step) — the "learning
+   * events" become visible while scrubbing or playing the time-lapse. */
+  flashCells(cells: Set<string>): void {
+    if (!cells.size) return
+    this.flash = cells
+    window.clearTimeout(this.flashTimer)
+    this.flashTimer = window.setTimeout(() => {
+      this.flash = null
+      this.render()
+    }, 450)
     this.render()
   }
 
@@ -100,6 +118,17 @@ export class LensGrid {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
     this.renderTo(ctx, { dark: this.dark.matches })
+    // change-flash overlay lives here, NOT in renderTo: exported figures must never carry it
+    if (this.flash) {
+      ctx.strokeStyle = this.dark.matches ? '#ffd166' : '#e8590c'
+      ctx.lineWidth = 2
+      for (const key of this.flash) {
+        const [layer, t] = key.split(':').map(Number)
+        if (layer < 0 || layer >= grid.layers || t < 0 || t >= grid.positions) continue
+        const row = grid.layers - 1 - layer
+        ctx.strokeRect(LABEL_W + t * CELL_W + 1, HEADER_H + row * CELL_H + 1, CELL_W - 2, CELL_H - 2)
+      }
+    }
   }
 
   /** Grid pixel size at scale 1 (used by the figure exporter). */

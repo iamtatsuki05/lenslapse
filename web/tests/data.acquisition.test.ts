@@ -1,0 +1,44 @@
+import { describe, expect, it } from 'vitest'
+import { acquisitionMap, fmtStep } from '../src/data'
+import type { Shard } from '../src/data'
+
+// 1 layer x 2 positions, steps 0/10/20. Cell 0: B,A,A -> final A first at step 10.
+// Cell 1: A,B,A -> final A first at step 0 (the map records first appearance, not stability).
+const shard: Shard = {
+  vocab: { '1': 'A', '2': 'B' },
+  steps: {
+    '0': { top: [[[[2, 0.3]], [[1, 0.2]]]] },
+    '10': { top: [[[[1, 0.4]], [[2, 0.3]]]] },
+    '20': { top: [[[[1, 0.6]], [[1, 0.5]]]] },
+  },
+}
+
+describe('acquisitionMap', () => {
+  it('finds the first step where each cell already predicts its final answer', () => {
+    const acq = acquisitionMap(shard, [0, 10, 20])!
+    expect(acq.layers).toBe(1)
+    expect(acq.positions).toBe(2)
+    expect(acq.firstIdx[0]).toEqual([1, 0])
+    expect(acq.finalTop[0][0]).toEqual(['A', 0.6, 1])
+    expect(acq.finalTop[0][1]).toEqual(['A', 0.5, 1])
+  })
+
+  it('returns null when the final step is missing from the shard', () => {
+    expect(acquisitionMap(shard, [0, 10, 999])).toBeNull()
+  })
+
+  it('tolerates steps absent from the shard mid-scan', () => {
+    const acq = acquisitionMap(shard, [0, 5, 10, 20])!
+    expect(acq.firstIdx[0]).toEqual([2, 0]) // step 5 has no entry; A first seen at index 2 (step 10)
+  })
+})
+
+describe('fmtStep', () => {
+  it('formats steps compactly for grid cells', () => {
+    expect(fmtStep(0)).toBe('0')
+    expect(fmtStep(512)).toBe('512')
+    expect(fmtStep(1000)).toBe('1k')
+    expect(fmtStep(2738)).toBe('2.7k')
+    expect(fmtStep(143000)).toBe('143k')
+  })
+})
