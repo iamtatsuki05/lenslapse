@@ -57,7 +57,7 @@
             factual knowledge. Curated prompts render instantly from precomputed data, while any free-text prompt is
             probed live in the browser via WebGPU/WASM ONNX inference — no server, no API key, and your prompt never
             leaves your device. The in-browser lens matches fp32 PyTorch with 100% top-1 agreement on our evaluation
-            suite (where int8 quantization degrades to as low as 52%), and warm probes complete in 65–340&nbsp;ms on
+            suite (where int8 quantization degrades to as low as 52%), and warm probes complete in 63–316&nbsp;ms on
             Chromium/WebKit across three model sizes (14M–160M).
           </p>
         </div>
@@ -102,6 +102,25 @@
               drops to 52%, so we do not ship it.
             </p>
           </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">▶</span>
+            <h3>Watchable by design</h3>
+            <p>
+              One click plays the whole time-lapse, cells flashing as their top-1 changes. A top-10 bar race and the
+              classic p-vs-layer profile animate at the pinned cell; an acquisition map shows when each cell first
+              learned its final answer, a diff view shows what changed since any reference checkpoint, and a compare
+              mode renders a second model in lockstep.
+            </p>
+          </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">⌨</span>
+            <h3>Scriptable end to end</h3>
+            <p>
+              Every UI action has a CLI twin — <code>lenslapse probe</code>/<code>trace</code>/<code>models</code> —
+              and the app can copy the exact CLI or cURL command that reproduces the current view. Track any token
+              across training, share permalinks, or embed a live grid anywhere with <code>?embed</code>.
+            </p>
+          </div>
         </div>
       </section>
 
@@ -114,13 +133,14 @@
                 src="/about/fig1-ui.png"
                 alt="The full LensLapse interface: logit-lens grid, training-step slider, trajectory panel, and emergence stories"
                 width="2880"
-                height="2020"
+                height="1984"
               />
             </div>
             <figcaption>
-              The full interface at step 8,000 (Pythia-70M): the logit-lens grid (left), the log-scale training-step
-              slider (top), exact probability trajectories for the pinned cell (right), and curated emergence stories
-              that jump to a preset view.
+              The full interface at step 8,000 (Pythia-70M): the logit-lens grid with its view toggles (left), the
+              log-scale training-step slider with the play button (top), and — for the pinned cell — exact
+              probability trajectories, the p-vs-layer profile, and the top-10 race (right), above curated emergence
+              stories.
             </figcaption>
           </figure>
           <figure>

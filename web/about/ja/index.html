@@ -103,6 +103,25 @@
               PyTorch と top-1 一致率 100% を保つ。int8 動的量子化は 52% まで落ちるため採用していない。
             </p>
           </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">▶</span>
+            <h3>「見て分かる」ための可視化</h3>
+            <p>
+              ワンクリックでタイムラプス全体を再生し、top-1 が変わったセルはその瞬間に発光。ピン留めしたセルでは
+              top-10 のバーレースと古典的な層プロファイル(p 対 layer)がアニメーションする。acquisition map
+              は各セルが最終的な答えを覚えたステップを、diff ビューは任意の参照チェックポイントからの変化を、比較モードは
+              第二のモデルを同じステップで並べて見せる。
+            </p>
+          </div>
+          <div class="card">
+            <span class="card-icon" aria-hidden="true">⌨</span>
+            <h3>端までスクリプタブル</h3>
+            <p>
+              UI の全操作に CLI の対応物がある(<code>lenslapse probe</code>/<code>trace</code>/<code>models</code>)。
+              アプリからは現在のビューを再現する CLI / cURL コマンドをコピーでき、任意のトークンを学習過程にわたって
+              追跡できる。permalink で共有でき、<code>?embed</code> で任意のページに生きたグリッドを埋め込める。
+            </p>
+          </div>
         </div>
       </section>
 
@@ -115,13 +134,13 @@
                 src="/about/fig1-ui.png"
                 alt="LensLapse の画面全体。logit-lens グリッド、訓練ステップのスライダー、軌跡パネル、emergence stories が並ぶ"
                 width="2880"
-                height="2020"
+                height="1984"
               />
             </div>
             <figcaption>
-              step 8,000(Pythia-70M)での画面全体。左に logit-lens
-              グリッド、上に対数スケールの訓練ステップスライダー、右にピン留めしたセルの確率軌跡と、見どころのプリセットに一気に飛べる
-              emergence stories。
+              step 8,000(Pythia-70M)での画面全体。左にビュー切替付きの logit-lens
+              グリッド、上に再生ボタン付きの訓練ステップスライダー、右にピン留めしたセルの確率軌跡・層プロファイル・top-10
+              バーレース、その下に見どころのプリセットへ飛べる emergence stories。
             </figcaption>
           </figure>
           <figure>
