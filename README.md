@@ -8,6 +8,17 @@
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
 - Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
 
+## Quick start: probe your own models (no checkout needed)
+
+```bash
+pip install "git+https://github.com/iamtatsuki05/lenslapse.git"
+lenslapse server        # starts the local probe server and opens the app in your browser
+```
+
+Click **⚙ models** in the app's header, pick a Hugging Face id or press **📁 Browse…** to choose
+a checkpoint folder with your OS's file dialog, and probe it live — no ONNX conversion, no config
+files. (Your browser may ask permission to let the page reach the local server; allow it.)
+
 ## Why
 
 - No public, hosted tool lets you interactively inspect a real LLM's internals *across training time* (Pythia ships 154 checkpoints, but existing views are loss curves and static galleries).
@@ -84,11 +95,12 @@ remembers the server across visits, so later visits need no parameter; `?probe=o
 On an HTTPS deployment your browser may ask permission to reach the local network the first time.
 
 When a probe server is connected, a **⚙ models** button appears in the header: register a Hub
-model (single checkpoint or a `step{N}` suite) or a Trainer directory on the server machine from
-the dialog — no ONNX export, no CLI. Registered models show up in the picker as “(server)”,
-are live-only (no precomputed prompts), and persist to `server/registry.json` across restarts.
-The management API (`GET/POST/DELETE /models`) is unauthenticated by design — keep the server
-bound to localhost.
+model (single checkpoint or a `step{N}` suite) or a local checkpoint folder — pick it with
+**📁 Browse…**, which opens the server machine's native folder dialog — no ONNX export, no CLI.
+Registered models show up in the picker as “(server)”, are live-only (no precomputed prompts),
+and persist across restarts (`server/registry.json` in a checkout, `~/.lenslapse/` for pip
+installs). The management API (`GET/POST/DELETE /models`, `/pick-folder`) is unauthenticated by
+design — keep the server bound to localhost.
 
 Each registered model also has a **convert to ONNX** button that runs the full onboarding
 pipeline (`add_model.py`) on the server machine in the background (roughly a minute per sub-200M

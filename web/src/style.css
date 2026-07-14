@@ -547,3 +547,13 @@ body {
   gap: 0.4rem;
   white-space: nowrap;
 }
+.input-with-button {
+  display: flex;
+  gap: 0.4rem;
+}
+.input-with-button input {
+  flex: 1;
+}
+.input-with-button .btn {
+  white-space: nowrap;
+}

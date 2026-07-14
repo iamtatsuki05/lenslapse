@@ -38,7 +38,7 @@ export function setupManageModels(onChange) {
     // convenience prefills; both stay editable
     const ref = refInput.value.trim()
     if (!idInput.dataset.touched) {
-      idInput.value = (ref.split('/').filter(Boolean).pop() ?? '')
+      idInput.value = (ref.split(/[\\/]/).filter(Boolean).pop() ?? '')
         .toLowerCase()
         .replace(/[^a-z0-9._-]/g, '-')
         .replace(/^[^a-z0-9]+/, '') // ids must start alphanumeric
@@ -50,6 +50,36 @@ export function setupManageModels(onChange) {
   })
   idInput.addEventListener('input', () => {
     idInput.dataset.touched = '1'
+  })
+
+  // native folder picker: the dialog opens on the machine running the probe server (the same
+  // machine in the intended localhost setup), so nobody has to type an absolute path
+  const browse = $('am-browse')
+  browse.addEventListener('click', async () => {
+    browse.disabled = true
+    error.textContent = ''
+    const oldLabel = browse.textContent
+    browse.textContent = 'see the dialog…'
+    try {
+      const res = await fetch(new URL('/pick-folder', origin), { signal: AbortSignal.timeout(310000) })
+      if (!res.ok) {
+        const detail = await errorDetail(res)
+        if (res.status !== 400) error.textContent = detail // 400 = user cancelled; stay quiet
+        return
+      }
+      const { path } = await res.json()
+      refInput.value = path
+      refInput.dispatchEvent(new Event('input')) // prefills the id
+      // the picker always returns a directory — select local mode explicitly (the ref-prefix
+      // heuristic would miss Windows paths like C:\Users\...)
+      document.querySelector('input[name="am-mode"][value="local"]').checked = true
+      stepsRow.hidden = true
+    } catch (err) {
+      error.textContent = `folder dialog failed: ${err.message}`
+    } finally {
+      browse.disabled = false
+      browse.textContent = oldLabel
+    }
   })
 
   let listGen = 0 // bumped per render: poll chains from replaced (detached) rows must stop
@@ -127,7 +157,7 @@ export function setupManageModels(onChange) {
           setTimeout(poll, 3000)
         } else if (job.status === 'done') {
           btn.disabled = true
-          stat.textContent = 'converted — rebuild/reload the app to run it in-browser'
+          stat.textContent = job.note ?? 'converted — rebuild/reload the app to run it in-browser'
         } else {
           btn.disabled = false
           stat.textContent = `conversion failed: ${job.log.at(-1) ?? 'see server log'}`

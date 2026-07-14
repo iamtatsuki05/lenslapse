@@ -116,8 +116,13 @@
       <form id="add-model-form">
         <h4>Add a model</h4>
         <label>
-          <span>Source (HF id or a directory on the server machine)</span>
-          <input id="am-ref" required placeholder="org/model-name or /path/to/trainer_output" autocomplete="off" />
+          <span>Source (HF id or a folder on the server machine)</span>
+          <span class="input-with-button">
+            <input id="am-ref" required placeholder="org/model-name or /path/to/trainer_output" autocomplete="off" />
+            <button id="am-browse" type="button" class="btn" title="Pick a folder with the server machine's file dialog">
+              📁 Browse…
+            </button>
+          </span>
         </label>
         <div class="form-row">
           <label>
