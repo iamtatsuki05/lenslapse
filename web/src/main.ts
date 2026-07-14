@@ -291,14 +291,15 @@ function showLayerProfile(
   series: TrajectorySeries[],
   layers: number,
   pinnedLayer: number,
-  opts: { goldId?: number; colors?: Map<number, string> }
+  opts: { goldId?: number; colors?: Map<number, string> },
+  stepLabel: number = currentStep()
 ): void {
   if (!series.length || layers < 2) {
     hideLayerProfile()
     return
   }
   $('layer-caption').hidden = false
-  $('layer-caption').textContent = `layer profile — step ${currentStep().toLocaleString()}`
+  $('layer-caption').textContent = `layer profile — step ${stepLabel.toLocaleString()}`
   const svg = $<SVGSVGElement>('layer-svg')
   svg.style.display = 'block'
   renderLayerProfile(svg, series, layers, pinnedLayer, opts)
@@ -332,7 +333,9 @@ async function refreshTrajectory(): Promise<void> {
       sub.textContent = `${state.pinned.layer === 0 ? 'embedding' : `layer ${state.pinned.layer}`}, position ${pos} across ${steps.length} live-probed checkpoints`
       const colors = assignSeriesColors(series)
       renderTrajectory(svg, series, steps, currentStep(), { colors })
-      const cur = sweep.byStep.get(currentStep())
+      // in-browser sweeps only cover live-capable checkpoints — read the nearest probed one
+      const curKey = sweep.byStep.has(currentStep()) ? currentStep() : nearestStep(steps, currentStep())
+      const cur = sweep.byStep.get(curKey)
       const profile = cur?.tgt
         ? sweep.targets
             .map(({ id, token }) => {
@@ -343,7 +346,7 @@ async function refreshTrajectory(): Promise<void> {
             })
             .filter((s): s is NonNullable<typeof s> => s !== null)
         : []
-      showLayerProfile(profile, cur?.grid.layers ?? 0, layer, { colors })
+      showLayerProfile(profile, cur?.grid.layers ?? 0, layer, { colors }, curKey)
       return
     }
     svg.replaceChildren()
@@ -450,6 +453,7 @@ function randomView(): void {
   state.mode = 'pre'
   const prompt = index.prompts[Math.floor(Math.random() * index.prompts.length)]
   state.promptId = prompt.id
+  state.extraTargets = []
   $<HTMLSelectElement>('prompt-select').value = String(prompt.id)
   state.stepIdx = Math.floor(Math.random() * state.steps.length)
   $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
@@ -633,6 +637,7 @@ async function runSweep(): Promise<void> {
 async function applyStory(card: StoryCard): Promise<void> {
   stopPlay()
   if (state.gridView === 'acq') setGridView('top1') // stories are step-specific views
+  state.extraTargets = [] // a story defines its own view; tracked tokens belong to the old one
   const nearest = nearestStep(state.steps, card.step)
   state.stepIdx = state.steps.indexOf(nearest)
   $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
@@ -674,7 +679,12 @@ async function trackToken(raw: string): Promise<void> {
     status('tracking a token needs live probing, which is unavailable for this model right now')
     return
   }
-  const text = state.mode === 'live' && state.liveText ? state.liveText : currentPrompt().text
+  const promptText = index?.prompts.length ? currentPrompt().text : null
+  const text = state.mode === 'live' && state.liveText ? state.liveText : promptText
+  if (!text) {
+    status('probe a prompt first, then track tokens on it')
+    return
+  }
   let ids: number[]
   let tokens: string[]
   try {
@@ -688,12 +698,14 @@ async function trackToken(raw: string): Promise<void> {
   const id = ids[pick]
   const token = tokens[pick]
   if (ids.length > 1) status(`“${raw}” splits into ${ids.length} tokens — tracking “${token}”`)
-  if (!state.extraTargets.some((t) => t.id === id)) state.extraTargets.push({ id, token })
+  // ensure the live view is on `text` BEFORE registering the target: a text change inside
+  // runLiveProbe clears extraTargets, which would silently drop a token added earlier
   if (state.mode !== 'live' || state.liveText !== text) {
     $<HTMLInputElement>('live-input').value = text
     await runLiveProbe(text)
     if (state.mode !== 'live' || state.liveText !== text) return // probe failed or was superseded
   }
+  if (!state.extraTargets.some((t) => t.id === id)) state.extraTargets.push({ id, token })
   await runSweep()
 }
 
@@ -987,8 +999,9 @@ async function boot(): Promise<void> {
   if (EMBED) {
     const a = $<HTMLAnchorElement>('embed-link')
     a.hidden = false
-    // resolve at click time so the link opens the full app on the exact embedded view
-    a.addEventListener('pointerdown', () => a.setAttribute('href', `./${location.hash}`))
+    // resolve at activation time so the link opens the full app on the exact embedded view
+    // (click covers keyboard activation too; handlers run before the default navigation)
+    a.addEventListener('click', () => a.setAttribute('href', `./${location.hash}`))
   }
   document.addEventListener('keydown', (e) => {
     if (e.code !== 'Space' || e.repeat) return

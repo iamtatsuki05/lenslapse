@@ -136,7 +136,8 @@ def test_tokenize_uses_the_models_own_tokenizer(
     client: TestClient, trainer_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class StubTok:
-        def __call__(self, text: str) -> dict:
+        def __call__(self, text: str, add_special_tokens: bool = True) -> dict:
+            assert add_special_tokens is False  # a BOS must never become the tracked token
             return {"input_ids": list(range(len(text.split())))}
 
         def convert_ids_to_tokens(self, ids: list) -> list:

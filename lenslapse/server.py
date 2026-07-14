@@ -498,6 +498,8 @@ def convert_status(model_id: str) -> dict[str, Any]:
 def tokenize(req: TokenizeRequest) -> dict[str, Any]:
     """Tokenize with a registered model's own tokenizer — the app's track-a-token feature needs
     ids for server-backed models, whose tokenizers never ship to the browser."""
+    if len(req.text) > 2000:
+        raise HTTPException(400, "text too long to tokenize (max 2000 characters)")
     entry = STATE["registry"].get(req.model)
     if entry is None:
         raise HTTPException(404, f"unknown model id {req.model!r}")
@@ -511,7 +513,8 @@ def tokenize(req: TokenizeRequest) -> dict[str, Any]:
             TOKENIZERS.popitem(last=False)
         TOKENIZERS[key] = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision)
     tok = TOKENIZERS[key]
-    ids = tok(req.text)["input_ids"]
+    # no special tokens: the app tracks the first content token, which must never be a BOS
+    ids = tok(req.text, add_special_tokens=False)["input_ids"]
     return {"ids": [int(i) for i in ids], "tokens": tok.convert_ids_to_tokens(ids)}
 
 

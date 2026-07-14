@@ -241,7 +241,9 @@ export class LiveEngine {
    * server (server-backed models never ship a tokenizer to the browser). */
   async tokenize(text: string): Promise<{ ids: number[]; tokens: string[] }> {
     if (this.tokenizer) {
-      const enc = this.tokenizer(text)
+      // no special tokens: a BOS-adding tokenizer would otherwise put <s> at index 0 and the
+      // track feature would silently trace the BOS instead of the user's token
+      const enc = this.tokenizer(text, { add_special_tokens: false })
       const ids = Array.from(enc.input_ids.data as ArrayLike<bigint | number>, Number)
       return { ids, tokens: ids.map((id) => this.tokenizer!.decode([id])) }
     }
