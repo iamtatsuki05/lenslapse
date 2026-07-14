@@ -40,6 +40,8 @@ export interface ProbeResult {
   backend: string
   serverCached?: boolean
   replayed?: boolean
+  /** Exact probability/rank per (layer, position) for explicitly tracked token ids. */
+  tgt?: Record<string, { token: string; p: number[][]; r: number[][] }>
 }
 
 // Optional local probe server for models too heavy for the browser.
@@ -321,22 +323,29 @@ export class LiveEngine {
   }
 
   /** Single forward pass + lens over every (layer, position). Returns grid cells + timing. */
-  async probe(text: string, step: number, onStatus?: StatusFn): Promise<ProbeResult> {
-    // reproducibility: identical (model, step, prompt) replays the stored result
+  async probe(text: string, step: number, onStatus?: StatusFn, targets?: number[]): Promise<ProbeResult> {
+    // reproducibility: identical (model, step, prompt) replays the stored result — unless the
+    // caller tracks target tokens the stored result does not carry yet
     const key = probeKey(this.modelId, step, text)
     const saved = FRESH ? null : await getProbe<ProbeResult>(key)
-    if (saved) return { ...saved, replayed: true }
-    const result = this.server ? await this.probeServer(text, step, onStatus) : await this.probeOnnx(text, step, onStatus)
-    await putProbe(key, result)
-    return result
+    if (saved && (!targets?.length || targets.every((id) => saved.tgt?.[String(id)]))) {
+      return { ...saved, replayed: true }
+    }
+    const result = this.server
+      ? await this.probeServer(text, step, onStatus, targets)
+      : await this.probeOnnx(text, step, onStatus, targets)
+    // merge tracked tokens into the stored record so earlier targets survive later probes
+    const merged = saved?.tgt || result.tgt ? { ...result, tgt: { ...saved?.tgt, ...result.tgt } } : result
+    await putProbe(key, merged)
+    return merged
   }
 
-  async probeServer(text: string, step: number, onStatus?: StatusFn): Promise<ProbeResult> {
+  async probeServer(text: string, step: number, onStatus?: StatusFn, targets?: number[]): Promise<ProbeResult> {
     onStatus?.(`probing on ${this.server}…`)
     const res = await fetch(new URL('/probe', this.server), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.modelId, step, text }),
+      body: JSON.stringify({ model: this.modelId, step, text, ...(targets?.length ? { targets } : {}) }),
     })
     if (!res.ok) throw new Error(`probe server: ${res.status} ${(await res.text()).slice(0, 120)}`)
     const r = await res.json()
@@ -346,10 +355,11 @@ export class LiveEngine {
       timing: { total: r.timing.total, forward: r.timing.forward, probe: r.timing.total },
       backend: 'server',
       serverCached: r.cached,
+      ...(r.tgt ? { tgt: r.tgt } : {}),
     }
   }
 
-  async probeOnnx(text: string, step: number, onStatus?: StatusFn): Promise<ProbeResult> {
+  async probeOnnx(text: string, step: number, onStatus?: StatusFn, targets?: number[]): Promise<ProbeResult> {
     const t0 = performance.now()
     const { backbone, lens } = await this.loadCheckpoint(step, onStatus)
     const enc = this.tokenizer!(text)
@@ -380,6 +390,27 @@ export class LiveEngine {
       }
       cells.push(row)
     }
+    let tgt: ProbeResult['tgt']
+    if (targets?.length) {
+      tgt = {}
+      for (const tid of [...new Set(targets)].sort((a, b) => a - b)) {
+        const pRows: number[][] = []
+        const rRows: number[][] = []
+        for (let li = 0; li < L1; li++) {
+          const pRow: number[] = []
+          const rRow: number[] = []
+          for (let t = 0; t < T; t++) {
+            const off = (li * T + t) * V
+            const { p, r } = targetStat(logits.data as Float32Array, off, V, tid)
+            pRow.push(p)
+            rRow.push(r)
+          }
+          pRows.push(pRow)
+          rRows.push(rRow)
+        }
+        tgt[String(tid)] = { token: this.tokenizer!.decode([tid]), p: pRows, r: rRows }
+      }
+    }
     const t3 = performance.now()
     return {
       tokens,
@@ -387,8 +418,23 @@ export class LiveEngine {
       // forward = backbone + lens sessions; probe additionally includes the JS softmax/top-10 pass
       timing: { total: t3 - t0, forward: t2 - t1, probe: t3 - t1 },
       backend: this.backend!,
+      ...(tgt ? { tgt } : {}),
     }
   }
+}
+
+/** Exact softmax probability and rank of one token id in a cell's logit row. */
+export function targetStat(data: Float32Array, off: number, V: number, tid: number): { p: number; r: number } {
+  let max = -Infinity
+  for (let i = 0; i < V; i++) if (data[off + i] > max) max = data[off + i]
+  let Z = 0
+  let rank = 1
+  const v = data[off + tid]
+  for (let i = 0; i < V; i++) {
+    Z += Math.exp(data[off + i] - max)
+    if (data[off + i] > v) rank++
+  }
+  return { p: Math.round((Math.exp(v - max) / Z) * 1e6) / 1e6, r: rank }
 }
 
 export function topkSoftmax(

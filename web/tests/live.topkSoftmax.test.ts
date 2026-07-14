@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 // onnxruntime-web is only needed by LiveEngine methods; topkSoftmax is pure JS.
 vi.mock('onnxruntime-web/webgpu', () => ({}))
 
-import { topkSoftmax } from '../src/live'
+import { targetStat, topkSoftmax } from '../src/live'
 
 const decode = (id: number) => `t${id}`
 
@@ -47,5 +47,26 @@ describe('topkSoftmax', () => {
     const cell = topkSoftmax(data, V, V, 2, decode)
     expect(cell.top.map(([, , id]) => id)).toEqual([2, 4])
     expect(cell.prob).toBeCloseTo(softmax(row2)[2], 6)
+  })
+})
+
+describe('targetStat', () => {
+  it('matches a reference softmax and uses strictly-greater rank', () => {
+    const data = new Float32Array([1, 3, 2, 3])
+    const Z = [...data].reduce((acc, v) => acc + Math.exp(v - 3), 0)
+    const s0 = targetStat(data, 0, 4, 0)
+    expect(s0.p).toBeCloseTo(Math.round((Math.exp(1 - 3) / Z) * 1e6) / 1e6, 9)
+    expect(s0.r).toBe(4) // three logits are strictly greater
+    // ties do not inflate the rank (strictly greater + 1, same as the Python pipeline)
+    expect(targetStat(data, 0, 4, 1).r).toBe(1)
+    expect(targetStat(data, 0, 4, 3).r).toBe(1)
+    expect(targetStat(data, 0, 4, 2).r).toBe(3)
+  })
+
+  it('respects the row offset', () => {
+    const data = new Float32Array([9, 9, 0, 1]) // second row starts at offset 2
+    const s = targetStat(data, 2, 2, 1)
+    expect(s.r).toBe(1)
+    expect(s.p).toBeCloseTo(Math.exp(1) / (Math.exp(0) + Math.exp(1)), 5)
   })
 })

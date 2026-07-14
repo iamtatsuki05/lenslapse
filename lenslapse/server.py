@@ -111,6 +111,9 @@ class ProbeRequest(BaseModel):
     model: str
     step: int = 0
     text: str
+    # optional token ids to track exactly (probability + rank at every layer/position); lets the
+    # app draw training trajectories for live prompts the same way precomputed shards do
+    targets: list[int] | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -475,6 +478,13 @@ def convert_status(model_id: str) -> dict[str, Any]:
         return result
 
 
+def probe_cache_key(src: CheckpointSource, req: ProbeRequest) -> str:
+    """Content key for one probe. JSON-encoded fields, not string concatenation: free-form
+    prompt text must never be able to collide with the key of a different (text, targets)."""
+    payload = [src.load_ref, src.revision, req.text, sorted(set(req.targets or []))]
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+
+
 def read_cache(cache_file: Path) -> dict | None:
     if not cache_file.exists():
         return None
@@ -491,8 +501,7 @@ def read_cache(cache_file: Path) -> dict | None:
 @app.post("/probe")
 def probe(req: ProbeRequest) -> dict[str, Any]:
     src = source_for(req.model, req.step)
-    cache_key = hashlib.sha256(f"{src.load_ref}@{src.revision}::{req.text}".encode()).hexdigest()
-    cache_file = STATE["cache_dir"] / f"{cache_key}.json"
+    cache_file = STATE["cache_dir"] / f"{probe_cache_key(src, req)}.json"
     if (result := read_cache(cache_file)) is not None:
         return result
 
@@ -534,6 +543,17 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
         ]
         for li in range(lp.shape[0])
     ]
+    tgt: dict[str, Any] = {}
+    for tid in sorted(set(req.targets or [])):
+        if not 0 <= tid < lp.shape[-1]:
+            raise HTTPException(400, f"target id {tid} is outside the vocabulary (0..{lp.shape[-1] - 1})")
+        ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
+        tgt[str(tid)] = {
+            "token": tok.convert_ids_to_tokens([tid])[0],
+            "p": [[round(float(x), 6) for x in row] for row in probs[:, :, tid].tolist()],
+            "r": [[int(x) for x in row] for row in ranks.tolist()],
+        }
+
     result = {
         "model": req.model,
         "ref": src.load_ref,
@@ -542,6 +562,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
         "text": req.text,
         "tokens": tok.convert_ids_to_tokens(ids),
         "grid": {"layers": lp.shape[0], "positions": lp.shape[1], "cells": cells},
+        **({"tgt": tgt} if tgt else {}),
         "timing": {"total": round((t2 - t0) * 1000), "forward": round((t2 - t1) * 1000)},
         "device": str(device),
         "cached": False,

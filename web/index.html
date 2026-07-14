@@ -37,6 +37,7 @@
               <button id="export-pdf" class="btn">PDF</button>
             </div>
           </details>
+          <a id="about-link" class="chip btn" href="./about/" title="Project page (EN/JA)">About</a>
           <a
             id="repo-link"
             class="chip btn"
@@ -79,6 +80,9 @@
             <div class="panel-head">
               <h2>Trajectory across training</h2>
               <span id="traj-subtitle" class="hint">click a cell in the grid</span>
+              <button id="traj-sweep" class="btn" hidden title="Probe this prompt at every checkpoint to draw its training trajectory">
+                ▶ trace across training
+              </button>
             </div>
             <svg id="traj-svg" role="img" aria-label="token probability across training steps"></svg>
           </section>

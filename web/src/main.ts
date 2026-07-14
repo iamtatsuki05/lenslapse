@@ -4,7 +4,7 @@ import { LensGrid } from './grid'
 import { LiveEngine, fetchServerModels } from './live'
 import { setupManageModels } from './manage'
 import { renderTrajectory } from './traj'
-import { buildGallery, buildSliderTicks, hideTooltip, setBadge, showTooltip } from './ui'
+import { EXAMPLE_TEXTS, buildGallery, buildSliderTicks, hideTooltip, setBadge, showTooltip } from './ui'
 import { legendGradient } from './color'
 import type { ModelCatalog, ModelEntry, ModelIndex, Prompt } from './data'
 import type { PinnedCell } from './grid'
@@ -23,6 +23,13 @@ const state = {
   pinned: null as PinnedCell | null, // {layer, pos}
   steps: [] as number[],
   liveResult: null as LiveResult | null, // cached last live probe {text, step, grid, tokens}
+  // trajectory sweep over every checkpoint for the current live prompt
+  liveSweep: null as null | {
+    text: string
+    pos: number // the position whose final-layer top-3 fixed the targets
+    targets: { id: number; token: string }[]
+    byStep: Map<number, ProbeResult>
+  },
 }
 
 let catalog: ModelCatalog | null = null // models.json
@@ -104,11 +111,41 @@ async function refreshGrid(): Promise<void> {
 async function refreshTrajectory(): Promise<void> {
   const svg = $<SVGSVGElement>('traj-svg')
   const sub = $('traj-subtitle')
+  const sweepBtn = $<HTMLButtonElement>('traj-sweep')
   if (state.mode === 'live') {
+    const eng = engines.get(state.model!)
+    const canSweep = !!state.liveText && !!eng?.available && sweepableSteps().length > 1
+    sweepBtn.hidden = !canSweep
+    const sweep = state.liveSweep
+    if (sweep && sweep.text === state.liveText && sweep.byStep.size && state.pinned && state.pinned.pos === sweep.pos) {
+      const steps = [...sweep.byStep.keys()].sort((a, b) => a - b)
+      const { layer, pos } = state.pinned
+      const series = sweep.targets
+        .map(({ id, token }) => ({
+          id,
+          token,
+          points: steps.flatMap((st) => {
+            const t = sweep.byStep.get(st)!.tgt?.[String(id)]
+            return t?.p[layer]?.[pos] !== undefined ? [[st, t.p[layer][pos], t.r[layer][pos]] as [number, number, number]] : []
+          }),
+        }))
+        .filter((sr) => sr.points.length)
+        .sort((a, b) => b.points[b.points.length - 1][1] - a.points[a.points.length - 1][1])
+      sub.textContent = `${state.pinned.layer === 0 ? 'embedding' : `layer ${state.pinned.layer}`}, position ${pos} across ${steps.length} live-probed checkpoints`
+      renderTrajectory(svg, series, steps, currentStep(), {})
+      return
+    }
     svg.replaceChildren()
-    sub.textContent = 'trajectories are available for curated (precomputed) prompts'
+    sub.textContent = canSweep
+      ? state.pinned
+        ? sweep && sweep.text === state.liveText && state.pinned.pos !== sweep.pos
+          ? 'pinned a different position — trace again to track its tokens'
+          : 'press “trace across training” to probe every checkpoint'
+        : 'click a cell in the grid, then trace it across training'
+      : 'trajectories are available for curated (precomputed) prompts'
     return
   }
+  sweepBtn.hidden = true
   if (!state.pinned) {
     svg.replaceChildren()
     sub.textContent = 'click a cell in the grid'
@@ -187,16 +224,19 @@ async function runLiveProbe(text: string): Promise<void> {
     const res = await engine.probe(text, step, status)
     if (gen !== viewGen) return // user switched views while the probe ran
     state.mode = 'live'
+    if (state.liveSweep && state.liveSweep.text !== text) state.liveSweep = null
     state.liveText = text
     state.liveResult = { ...res, text, step }
-    state.pinned = null
+    if (state.pinned && (state.pinned.layer >= res.grid.layers || state.pinned.pos >= res.grid.positions)) {
+      state.pinned = null
+    }
     setBadge($('backend-badge'), res.backend)
     const where = res.backend === 'server' ? 'on the local probe server' : 'fully in your browser'
     const note = res.replayed ? ' · replayed from saved probe' : res.serverCached ? ' · from server cache' : ''
     status(
       `live probe @ step ${step.toLocaleString()} — forward+lens+top-k ${res.timing.probe.toFixed(0)}ms on ${res.backend} (${where})${note}`
     )
-    grid.pinned = null
+    grid.pinned = state.pinned ? { ...state.pinned } : null
     refreshGrid()
     refreshTrajectory()
     syncHash()
@@ -205,6 +245,57 @@ async function runLiveProbe(text: string): Promise<void> {
     if (gen === viewGen) status(`live probe failed: ${(e as Error).message}`)
   } finally {
     if (run === probeSeq) $<HTMLButtonElement>('live-btn').disabled = false
+  }
+}
+
+/** Steps a trajectory sweep can cover: every suite step via the server, live steps in-browser. */
+function sweepableSteps(): number[] {
+  const eng = engines.get(state.model!)
+  if (!eng?.available) return []
+  return eng.server ? state.steps : eng.liveSteps()
+}
+
+let sweepSeq = 0
+/** Probe the current live prompt at every checkpoint and stream the trajectory in. */
+async function runSweep(): Promise<void> {
+  const gen = viewGen
+  const run = ++sweepSeq
+  const engine = getEngine()
+  const text = state.liveText
+  const steps = sweepableSteps()
+  if (!text || steps.length < 2 || !state.liveResult) return
+  if (!state.pinned) {
+    // default to the classic lens cell: deepest layer, last position
+    state.pinned = { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
+    grid.pinned = { ...state.pinned }
+    refreshGrid()
+  }
+  const pin = state.pinned
+  const btn = $<HTMLButtonElement>('traj-sweep')
+  btn.disabled = true
+  try {
+    // fix the tracked tokens from the FINAL checkpoint: final-layer top-3 at the pinned position
+    // (the same convention the precomputed shards use)
+    const last = steps[steps.length - 1]
+    const finalRes = await engine.probe(text, last)
+    if (gen !== viewGen || run !== sweepSeq) return
+    const finalCell = finalRes.grid.cells[finalRes.grid.layers - 1][Math.min(pin.pos, finalRes.grid.positions - 1)]
+    const targets = finalCell.top.slice(0, 3).map(([token, , id]) => ({ id, token }))
+    state.liveSweep = { text, pos: pin.pos, targets, byStep: new Map() }
+    const ids = targets.map((t) => t.id)
+    for (let i = 0; i < steps.length; i++) {
+      if (gen !== viewGen || run !== sweepSeq) return
+      status(`tracing “${text.slice(0, 40)}” — step ${steps[i].toLocaleString()} (${i + 1}/${steps.length})…`)
+      const res = await engine.probe(text, steps[i], undefined, ids)
+      if (gen !== viewGen || run !== sweepSeq) return
+      state.liveSweep.byStep.set(steps[i], res)
+      refreshTrajectory()
+    }
+    status(`traced ${steps.length} checkpoints — scrub the slider to replay any of them instantly`)
+  } catch (e) {
+    if (gen === viewGen) status(`trace failed: ${(e as Error).message}`)
+  } finally {
+    if (run === sweepSeq) btn.disabled = false
   }
 }
 
@@ -258,14 +349,30 @@ function readHash(): void {
 function rebuildPromptSelect(): void {
   const sel = $<HTMLSelectElement>('prompt-select')
   sel.replaceChildren()
-  for (const p of index!.prompts) {
-    const opt = document.createElement('option')
-    opt.value = String(p.id)
-    opt.textContent = p.text.replaceAll('\n', '⏎')
-    sel.appendChild(opt)
+  if (index!.prompts.length) {
+    for (const p of index!.prompts) {
+      const opt = document.createElement('option')
+      opt.value = String(p.id)
+      opt.textContent = p.text.replaceAll('\n', '⏎')
+      sel.appendChild(opt)
+    }
+    sel.disabled = false
+    sel.value = String(state.promptId)
+    return
   }
-  sel.disabled = !index!.prompts.length
-  if (index!.prompts.length) sel.value = String(state.promptId)
+  // live-only model: offer the curated examples as one-click live probes on THIS model
+  const hint = document.createElement('option')
+  hint.value = ''
+  hint.textContent = 'example prompts (probed live on this model)…'
+  sel.appendChild(hint)
+  EXAMPLE_TEXTS.forEach((text, i) => {
+    const opt = document.createElement('option')
+    opt.value = `ex:${i}`
+    opt.textContent = text.replaceAll('\n', '⏎')
+    sel.appendChild(opt)
+  })
+  sel.disabled = false
+  sel.value = ''
 }
 
 async function switchModel(id: string): Promise<void> {
@@ -290,6 +397,8 @@ async function switchModel(id: string): Promise<void> {
   state.pinned = null
   grid.pinned = null
   state.liveResult = null
+  state.liveSweep = null // another model's trajectory must never render as this one's
+  state.liveText = ''
   rebuildPromptSelect()
   setupSliderRange()
   refreshStepUI()
@@ -378,6 +487,14 @@ async function boot(): Promise<void> {
 
   const sel = $<HTMLSelectElement>('prompt-select')
   sel.addEventListener('change', () => {
+    if (sel.value.startsWith('ex:')) {
+      // live-only model: the selected example fires a live probe on the current model
+      const text = EXAMPLE_TEXTS[Number(sel.value.slice(3))]
+      $<HTMLInputElement>('live-input').value = text
+      runLiveProbe(text)
+      return
+    }
+    if (sel.value === '') return
     viewGen++
     clearTimeout(liveDebounce)
     state.mode = 'pre'
@@ -406,20 +523,31 @@ async function boot(): Promise<void> {
   $('grid-legend').innerHTML =
     `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
 
-  buildGallery($('gallery-cards'), index.prompts, async (p, card) => {
-    // the story cards narrate the 70M model's training run; switch to it if needed
-    if (state.model !== 'pythia-70m' && catalog!.models.some((m) => m.id === 'pythia-70m')) {
-      $<HTMLSelectElement>('model-select').value = 'pythia-70m'
-      await switchModel('pythia-70m')
+  buildGallery($('gallery-cards'), async (card) => {
+    // the story applies to the CURRENTLY selected model: precomputed when its shards carry the
+    // prompt, a live probe otherwise — at the model's nearest available step
+    const nearest = state.steps.reduce((a, b) => (Math.abs(b - card.step) < Math.abs(a - card.step) ? b : a))
+    state.stepIdx = state.steps.indexOf(nearest)
+    $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
+    const p = index!.prompts.find((pr) => pr.text === card.text)
+    if (!p) {
+      clearTimeout(liveDebounce)
+      $<HTMLInputElement>('live-input').value = card.text
+      refreshStepUI()
+      await runLiveProbe(card.text)
+      if (card.pin === 'lastLayerLastPos' && state.liveResult?.text === card.text) {
+        state.pinned = { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
+        grid.pinned = { ...state.pinned }
+        refreshGrid()
+        refreshTrajectory()
+      }
+      return
     }
     viewGen++
     clearTimeout(liveDebounce)
     state.mode = 'pre'
     state.promptId = p.id
     $<HTMLSelectElement>('prompt-select').value = String(p.id)
-    const idx = state.steps.indexOf(card.step)
-    state.stepIdx = idx >= 0 ? idx : state.steps.length - 1
-    $<HTMLInputElement>('step-slider').value = String(state.stepIdx)
     state.pinned = card.pin === 'lastLayerLastPos' ? { layer: gridLayers() - 1, pos: p.tokens.length - 1 } : null
     grid.pinned = state.pinned ? { ...state.pinned } : null
     refreshBadgeAndTicks()
@@ -430,6 +558,7 @@ async function boot(): Promise<void> {
   })
 
   $('live-btn').addEventListener('click', () => runLiveProbe($<HTMLInputElement>('live-input').value))
+  $('traj-sweep').addEventListener('click', () => runSweep())
   $('live-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !$<HTMLButtonElement>('live-btn').disabled) runLiveProbe($<HTMLInputElement>('live-input').value)
   })

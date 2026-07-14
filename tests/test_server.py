@@ -187,3 +187,21 @@ def test_webapp_root_prefers_fresh_dist_and_requires_data(tmp_path: Path, monkey
     (dist / "index.html").write_text("<html></html>")
     (dist / "data" / "models.json").write_text("{}")
     assert server._webapp_root() == dist
+
+
+def test_probe_cache_key_cannot_collide_across_text_and_targets() -> None:
+    from lenslapse.server import ProbeRequest, probe_cache_key
+    from lenslapse.sources import CheckpointSource
+
+    src = CheckpointSource("org/m", "step0", 0)
+    plain = probe_cache_key(src, ProbeRequest(model="m", step=0, text='foo", "targets": [5]'))
+    targeted = probe_cache_key(src, ProbeRequest(model="m", step=0, text="foo", targets=[5]))
+    assert plain != targeted
+    # the old concatenation scheme collided exactly here
+    concat_a = probe_cache_key(src, ProbeRequest(model="m", step=0, text="foo::targets=5"))
+    concat_b = probe_cache_key(src, ProbeRequest(model="m", step=0, text="foo", targets=[5]))
+    assert concat_a != concat_b
+    # target order and duplicates do not change the key
+    assert probe_cache_key(src, ProbeRequest(model="m", step=0, text="foo", targets=[5, 3, 5])) == probe_cache_key(
+        src, ProbeRequest(model="m", step=0, text="foo", targets=[3, 5])
+    )
