@@ -181,7 +181,7 @@ async function updateRace(): Promise<void> {
   cap.textContent = `top-10 race at the pinned cell — step ${
     state.mode === 'live' ? (state.liveResult?.step ?? currentStep()).toLocaleString() : currentStep().toLocaleString()
   }`
-  renderRace(bars, top, { goldId })
+  renderRace(bars, top, { goldId, limit: 10 })
 }
 
 async function refreshTrajectory(): Promise<void> {
@@ -264,6 +264,7 @@ function stopPlay(): void {
   const b = $<HTMLButtonElement>('play-btn')
   b.textContent = '▶'
   b.setAttribute('aria-pressed', 'false')
+  syncHash() // hash writes are skipped during playback (Safari rate-limits replaceState) — record where we stopped
 }
 
 function startPlay(): void {
@@ -291,7 +292,8 @@ function setStepIdx(idx: number): void {
 
 function refreshPlayControls(): void {
   $<HTMLButtonElement>('play-btn').disabled = state.mode !== 'pre' || state.steps.length < 2
-  $<HTMLButtonElement>('acq-toggle').hidden = state.mode !== 'pre' || !index?.prompts.length
+  // the map is meaningless for single-checkpoint models (every cell would read "step 0")
+  $<HTMLButtonElement>('acq-toggle').hidden = state.mode !== 'pre' || !index?.prompts.length || state.steps.length < 2
 }
 
 function setGridView(view: 'top1' | 'acq'): void {
@@ -301,7 +303,7 @@ function setGridView(view: 'top1' | 'acq'): void {
   btn.textContent = view === 'acq' ? '▦ top-1 view' : '⏱ acquisition map'
   $('grid-legend').innerHTML =
     view === 'acq'
-      ? `<span>final answer first becomes top-1</span><span class="swatch" style="background:${legendGradient()}"></span><span>step 0 → ${state.steps.at(-1)?.toLocaleString() ?? ''}</span>`
+      ? `<span>final answer first becomes top-1</span><span class="swatch" style="background:${legendGradient()}"></span><span>earliest → latest checkpoint</span>`
       : `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
   prevTop1 = null
   if (view !== 'acq') acqView = null
@@ -444,13 +446,18 @@ function nearestLiveStep(step: number): number {
 /* ---------- permalink ---------- */
 
 function syncHash(): void {
+  if (playTimer !== undefined) return // ~5 writes/s during playback would trip Safari's replaceState rate limit
   const h = new URLSearchParams()
   h.set('m', state.model!)
   if (state.mode === 'live' && state.liveText) h.set('q', state.liveText)
   else if (index!.prompts.length) h.set('p', String(state.promptId))
   h.set('s', String(currentStep()))
   if (state.pinned) h.set('pin', `${state.pinned.layer},${state.pinned.pos}`)
-  history.replaceState(null, '', `#${h.toString()}`)
+  try {
+    history.replaceState(null, '', `#${h.toString()}`)
+  } catch {
+    /* a rate-limited replaceState must never break rendering */
+  }
 }
 
 function readHash(): void {
@@ -670,9 +677,11 @@ async function boot(): Promise<void> {
     refreshGrid()
   })
   document.addEventListener('keydown', (e) => {
-    if (e.code !== 'Space') return
+    if (e.code !== 'Space' || e.repeat) return
     const t = e.target as HTMLElement | null
+    // never steal Space from form fields or from a focused control's native activation
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+    if (t?.closest('button, summary, a, [role="button"]')) return
     if ($<HTMLDialogElement>('models-dialog').open) return
     e.preventDefault()
     if (playTimer === undefined) startPlay()
@@ -738,6 +747,7 @@ async function boot(): Promise<void> {
     },
   })
   const runExport = async (fn: 'png' | 'pdf', label: string) => {
+    stopPlay() // the figure must show the step its metadata names, not wherever playback ran to
     $('export-menu').removeAttribute('open')
     try {
       status(`exporting ${label}…`)
