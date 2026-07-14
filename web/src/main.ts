@@ -1,6 +1,7 @@
 import './style.css'
 import {
   acquisitionMap,
+  diffMap,
   fmtStep,
   gridFromShard,
   layerProfileFromShard,
@@ -24,10 +25,11 @@ import {
   hideTooltip,
   setBadge,
   showAcqTooltip,
+  showDiffTooltip,
   showTooltip,
 } from './ui'
 import { legendGradient } from './color'
-import type { ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry, TrajectorySeries } from './data'
+import type { DiffMap, ModelCatalog, ModelEntry, ModelIndex, Prompt, TopEntry, TrajectorySeries } from './data'
 import type { PinnedCell } from './grid'
 import type { ProbeResult, ServerModel } from './live'
 import type { StoryCard } from './ui'
@@ -43,7 +45,8 @@ const state = {
   liveText: '',
   stepIdx: 0,
   pinned: null as PinnedCell | null, // {layer, pos}
-  gridView: 'top1' as 'top1' | 'acq', // 'acq' = acquisition map (when each cell first got its final answer)
+  gridView: 'top1' as 'top1' | 'acq' | 'diff', // acq = acquisition map; diff = change vs a reference step
+  diffRef: null as number | null, // the frozen reference checkpoint for the diff view
   logColor: false, // color cells by log10(p) — reveals early-training structure
   compareId: null as string | null, // second model rendered in lockstep under the main grid
   extraTargets: [] as { id: number; token: string }[], // user-tracked tokens added to traces
@@ -109,6 +112,14 @@ const grid = new LensGrid($<HTMLCanvasElement>('lens-canvas'), {
     if (state.mode === 'pre' && state.gridView === 'acq' && acqView) {
       const firstStep = acqView.steps[acqView.firstIdx[cellInfo.layer]?.[cellInfo.pos] ?? acqView.steps.length - 1]
       showAcqTooltip($('tooltip'), cellInfo, evt!, gridTokens(), firstStep)
+    } else if (state.mode === 'pre' && state.gridView === 'diff' && diffView && state.diffRef !== null) {
+      showDiffTooltip($('tooltip'), cellInfo, evt!, gridTokens(), {
+        refStep: state.diffRef,
+        curStep: currentStep(),
+        ref: diffView.refTop[cellInfo.layer][cellInfo.pos],
+        cur: diffView.curTop[cellInfo.layer][cellInfo.pos],
+        change: diffView.change[cellInfo.layer][cellInfo.pos],
+      })
     } else showTooltip($('tooltip'), cellInfo, evt!, gridTokens())
   },
   onPin(pinned) {
@@ -124,6 +135,8 @@ let prevTop1: { key: string; ids: number[][] } | null = null
 let prevTop1B: { key: string; ids: number[][] } | null = null // same, for the compared model
 // data backing the acquisition-map tooltips
 let acqView: { steps: number[]; firstIdx: number[][] } | null = null
+// data backing the diff-view tooltips
+let diffView: DiffMap | null = null
 
 // second grid for compare mode: hover works, pinning stays on the primary grid
 const compareGrid = new LensGrid($<HTMLCanvasElement>('compare-canvas'), {
@@ -139,7 +152,7 @@ const compareGrid = new LensGrid($<HTMLCanvasElement>('compare-canvas'), {
 
 // a function call, not an inline comparison: TS control-flow narrowing would otherwise pin
 // state.gridView to 'top1' across the awaits below and reject the re-check
-const compareAllowed = (): boolean => state.mode === 'pre' && state.gridView !== 'acq'
+const compareAllowed = (): boolean => state.mode === 'pre' && state.gridView === 'top1'
 
 /** Render the compared model's grid at its checkpoint nearest to the current step. */
 async function refreshCompare(): Promise<void> {
@@ -206,6 +219,26 @@ async function refreshGrid(): Promise<void> {
   const gen = viewGen
   const shard = await loadShard(state.model!, state.promptId)
   if (gen !== viewGen) return
+  if (state.gridView === 'diff' && state.diffRef !== null) {
+    const d = diffMap(shard, state.diffRef, currentStep())
+    if (!d) return
+    diffView = d
+    const cells = d.curTop.map((row, li) =>
+      row.map((cur, t) => ({ token: cur[0], prob: d.change[li][t], top: [cur] }))
+    )
+    if (state.pinned && (state.pinned.layer >= d.layers || state.pinned.pos >= d.positions)) {
+      state.pinned = null
+      grid.pinned = null
+    }
+    grid.logScale = false // the color IS the change fraction, not a probability
+    grid.setData({ layers: d.layers, positions: d.positions, cells }, currentPrompt().tokens, state.pinned)
+    const flippedSet = new Set<string>()
+    d.flipped.forEach((row, li) => row.forEach((f, t) => f && flippedSet.add(`${li}:${t}`)))
+    grid.setMarks(flippedSet)
+    $('compare-wrap').hidden = true
+    updateRace()
+    return
+  }
   if (state.gridView === 'acq') {
     const acq = acquisitionMap(shard, index!.steps)
     if (!acq) return
@@ -438,8 +471,9 @@ function refreshPlayControls(): void {
   $<HTMLButtonElement>('play-btn').disabled = state.mode !== 'pre' || state.steps.length < 2
   // the map is meaningless for single-checkpoint models (every cell would read "step 0")
   $<HTMLButtonElement>('acq-toggle').hidden = !pre || state.steps.length < 2
-  $<HTMLButtonElement>('log-toggle').hidden = !pre || state.gridView === 'acq'
-  $<HTMLSelectElement>('compare-select').hidden = !pre || state.gridView === 'acq'
+  $<HTMLButtonElement>('log-toggle').hidden = !pre || state.gridView !== 'top1'
+  $<HTMLSelectElement>('compare-select').hidden = !pre || state.gridView !== 'top1'
+  $<HTMLButtonElement>('diff-toggle').hidden = !pre || state.steps.length < 2
   $<HTMLButtonElement>('dice-btn').hidden = !index?.prompts.length
 }
 
@@ -447,7 +481,7 @@ function refreshPlayControls(): void {
 function randomView(): void {
   if (!index?.prompts.length) return
   stopPlay()
-  if (state.gridView === 'acq') setGridView('top1')
+  if (state.gridView !== 'top1') setGridView('top1')
   viewGen++
   clearTimeout(liveDebounce)
   state.mode = 'pre'
@@ -484,20 +518,28 @@ function rebuildCompareSelect(): void {
   sel.value = state.compareId ?? ''
 }
 
-function setGridView(view: 'top1' | 'acq'): void {
+function setGridView(view: 'top1' | 'acq' | 'diff'): void {
   state.gridView = view
-  const btn = $<HTMLButtonElement>('acq-toggle')
-  btn.classList.toggle('active', view === 'acq')
-  btn.textContent = view === 'acq' ? '▦ top-1 view' : '⏱ acquisition map'
+  if (view !== 'diff') state.diffRef = null
+  const acqBtn = $<HTMLButtonElement>('acq-toggle')
+  acqBtn.classList.toggle('active', view === 'acq')
+  acqBtn.textContent = view === 'acq' ? '▦ top-1 view' : '⏱ acquisition map'
+  const diffBtn = $<HTMLButtonElement>('diff-toggle')
+  diffBtn.classList.toggle('active', view === 'diff')
+  diffBtn.textContent =
+    view === 'diff' && state.diffRef !== null ? `Δ vs step ${fmtStep(state.diffRef)} ✕` : 'Δ vs this step'
   $('grid-legend').innerHTML =
     view === 'acq'
       ? `<span>final answer first becomes top-1</span><span class="swatch" style="background:${legendGradient()}"></span><span>earliest → latest checkpoint</span>`
-      : state.logColor
-        ? `<span>lens top-1 probability (log)</span><span class="swatch" style="background:${legendGradient()}"></span><span>10⁻⁶ → 1</span>`
-        : `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
+      : view === 'diff'
+        ? `<span>top-10 turnover vs step ${state.diffRef !== null ? fmtStep(state.diffRef) : '—'} (outline = top-1 flipped)</span><span class="swatch" style="background:${legendGradient()}"></span><span>unchanged → replaced</span>`
+        : state.logColor
+          ? `<span>lens top-1 probability (log)</span><span class="swatch" style="background:${legendGradient()}"></span><span>10⁻⁶ → 1</span>`
+          : `<span>lens top-1 probability</span><span class="swatch" style="background:${legendGradient()}"></span><span>0 → 1</span>`
   prevTop1 = null
   prevTop1B = null
   if (view !== 'acq') acqView = null
+  if (view !== 'diff') diffView = null
   refreshPlayControls()
 }
 
@@ -550,7 +592,7 @@ async function runLiveProbe(text: string): Promise<void> {
     const res = await engine.probe(text, step, status)
     if (gen !== viewGen) return // user switched views while the probe ran
     state.mode = 'live'
-    if (state.gridView === 'acq') setGridView('top1') // the map needs all-step shards, which live mode lacks
+    if (state.gridView !== 'top1') setGridView('top1') // acq/diff need all-step shards, which live mode lacks
     refreshPlayControls()
     if (state.liveSweep && state.liveSweep.text !== text) {
       state.liveSweep = null
@@ -636,7 +678,7 @@ async function runSweep(): Promise<void> {
  * the prompt, a live probe otherwise — at the model's nearest available step. */
 async function applyStory(card: StoryCard): Promise<void> {
   stopPlay()
-  if (state.gridView === 'acq') setGridView('top1') // stories are step-specific views
+  if (state.gridView !== 'top1') setGridView('top1') // stories are step-specific top-1 views
   state.extraTargets = [] // a story defines its own view; tracked tokens belong to the old one
   const nearest = nearestStep(state.steps, card.step)
   state.stepIdx = state.steps.indexOf(nearest)
@@ -976,6 +1018,18 @@ async function boot(): Promise<void> {
     if (state.mode !== 'pre') return
     stopPlay()
     setGridView(state.gridView === 'acq' ? 'top1' : 'acq')
+    refreshGrid()
+  })
+  $('diff-toggle').addEventListener('click', () => {
+    if (state.mode !== 'pre') return
+    if (state.gridView === 'diff') {
+      setGridView('top1')
+    } else {
+      stopPlay() // freeze THIS checkpoint as the reference; scrubbing/playing then shows change vs it
+      state.diffRef = currentStep()
+      setGridView('diff')
+      status(`diff mode: comparing against step ${state.diffRef.toLocaleString()} — scrub or play to see what changes`)
+    }
     refreshGrid()
   })
   $('log-toggle').addEventListener('click', () => {

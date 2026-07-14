@@ -35,6 +35,7 @@ export class LensGrid {
   declare dark: MediaQueryList
   declare flash: Set<string> | null // "layer:pos" cells whose top-1 just changed (scrub/play)
   declare flashTimer: number | undefined
+  declare marks: Set<string> | null // persistent outlines (diff view: cells whose top-1 flipped)
   declare logScale: boolean // color by log10(p) instead of p — reveals early-training structure
 
   constructor(canvas: HTMLCanvasElement, { onHover, onPin }: LensGridCallbacks) {
@@ -45,6 +46,7 @@ export class LensGrid {
     this.pinned = null // {layer, pos}
     this.flash = null
     this.flashTimer = undefined
+    this.marks = null
     this.logScale = false
     this.onHover = onHover
     this.onPin = onPin
@@ -71,6 +73,13 @@ export class LensGrid {
     this.tokens = tokens
     this.pinned = pinned
     this.flash = null // stale highlights must not outline cells of a different grid
+    this.marks = null
+    this.render()
+  }
+
+  /** Persistent cell outlines (unlike the timed flash); cleared by the next setData. */
+  setMarks(cells: Set<string> | null): void {
+    this.marks = cells && cells.size ? cells : null
     this.render()
   }
 
@@ -121,16 +130,18 @@ export class LensGrid {
     ctx.clearRect(0, 0, w, h)
     this.renderTo(ctx, { dark: this.dark.matches })
     // change-flash overlay lives here, NOT in renderTo: exported figures must never carry it
-    if (this.flash) {
-      ctx.strokeStyle = this.dark.matches ? '#ffd166' : '#e8590c'
+    const outline = (cells: Set<string>, color: string) => {
+      ctx.strokeStyle = color
       ctx.lineWidth = 2
-      for (const key of this.flash) {
+      for (const key of cells) {
         const [layer, t] = key.split(':').map(Number)
         if (layer < 0 || layer >= grid.layers || t < 0 || t >= grid.positions) continue
         const row = grid.layers - 1 - layer
         ctx.strokeRect(LABEL_W + t * CELL_W + 1, HEADER_H + row * CELL_H + 1, CELL_W - 2, CELL_H - 2)
       }
     }
+    if (this.marks) outline(this.marks, this.dark.matches ? '#ffd166' : '#e8590c')
+    if (this.flash) outline(this.flash, this.dark.matches ? '#ffd166' : '#e8590c')
   }
 
   /** Grid pixel size at scale 1 (used by the figure exporter). */

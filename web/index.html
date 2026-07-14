@@ -86,6 +86,14 @@
             <span class="hint">cell = top-1 lens prediction · hover: top-10 · click: pin for trajectory</span>
             <span class="head-tools">
               <select id="compare-select" class="btn" hidden title="Render a second model's grid in lockstep — scale × time interactively"></select>
+              <button
+                id="diff-toggle"
+                class="btn"
+                hidden
+                title="Freeze this checkpoint as a reference, then scrub or play — cells color by how much they changed"
+              >
+                Δ vs this step
+              </button>
               <button id="log-toggle" class="btn" hidden title="Color by log probability — reveals early-training structure">
                 ㏒ log color
               </button>

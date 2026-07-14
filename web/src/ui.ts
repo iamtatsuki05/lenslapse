@@ -33,6 +33,33 @@ export function hideTooltip(el: HTMLElement): void {
   el.hidden = true
 }
 
+/** Tooltip for the diff view: the cell's top-1 at the reference vs the current checkpoint. */
+export function showDiffTooltip(
+  el: HTMLElement,
+  cellInfo: CellInfo,
+  evt: MouseEvent,
+  tokens: string[],
+  diff: { refStep: number; curStep: number; ref: [string, number, number]; cur: [string, number, number]; change: number }
+): void {
+  const { layer, pos } = cellInfo
+  const row = (label: string, [tok, p]: [string, number, number]) =>
+    `<tr><td>${label}</td><td>${escapeHtml(displayToken(tok))}</td><td>${(p * 100).toFixed(1)}%</td></tr>`
+  el.innerHTML = `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(
+    displayToken(tokens[pos] ?? '')
+  )}”</div><table>${row(`step ${diff.refStep.toLocaleString()}`, diff.ref)}${row(
+    `step ${diff.curStep.toLocaleString()}`,
+    diff.cur
+  )}<tr><td>top-10 turnover</td><td colspan="2">${(diff.change * 100).toFixed(0)}%</td></tr></table>`
+  el.hidden = false
+  const pad = 12
+  let x = evt.clientX + pad
+  let y = evt.clientY + pad
+  if (x + el.offsetWidth > innerWidth - 4) x = evt.clientX - el.offsetWidth - pad
+  if (y + el.offsetHeight > innerHeight - 4) y = evt.clientY - el.offsetHeight - pad
+  el.style.left = `${x}px`
+  el.style.top = `${y}px`
+}
+
 /** Tooltip for the acquisition-map view: the cell's final answer and when it first became top-1. */
 export function showAcqTooltip(
   el: HTMLElement,

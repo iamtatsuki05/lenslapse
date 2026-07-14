@@ -286,7 +286,8 @@ body {
 }
 
 #acq-toggle.active,
-#log-toggle.active {
+#log-toggle.active,
+#diff-toggle.active {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);

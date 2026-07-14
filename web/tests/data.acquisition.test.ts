@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acquisitionMap, fmtStep, layerProfileFromShard, nearestStep } from '../src/data'
+import { acquisitionMap, diffMap, fmtStep, layerProfileFromShard, nearestStep } from '../src/data'
 import { logProb01 } from '../src/color'
 import type { Prompt, Shard } from '../src/data'
 
@@ -41,6 +41,30 @@ describe('fmtStep', () => {
     expect(fmtStep(1000)).toBe('1k')
     expect(fmtStep(2738)).toBe('2.7k')
     expect(fmtStep(143000)).toBe('143k')
+  })
+})
+
+describe('diffMap', () => {
+  const two: Shard = {
+    vocab: { '1': 'A', '2': 'B', '3': 'C' },
+    steps: {
+      '0': { top: [[[[1, 0.5], [2, 0.3]], [[1, 0.4], [3, 0.2]]]] },
+      '10': { top: [[[[1, 0.6], [2, 0.2]], [[2, 0.5], [1, 0.1]]]] },
+    },
+  }
+
+  it('marks top-1 flips and measures top-k turnover as 1 - Jaccard', () => {
+    const d = diffMap(two, 0, 10)!
+    expect(d.flipped[0]).toEqual([false, true]) // cell 0 keeps A; cell 1 flips A -> B
+    expect(d.change[0][0]).toBe(0) // {1,2} vs {1,2}: identical candidate sets
+    expect(d.change[0][1]).toBeCloseTo(1 - 1 / 3) // {1,3} vs {2,1}: one shared of three
+    expect(d.refTop[0][1]).toEqual(['A', 0.4, 1])
+    expect(d.curTop[0][1]).toEqual(['B', 0.5, 2])
+  })
+
+  it('returns null when either step is missing', () => {
+    expect(diffMap(two, 0, 99)).toBeNull()
+    expect(diffMap(two, 99, 10)).toBeNull()
   })
 })
 

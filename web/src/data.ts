@@ -167,6 +167,51 @@ export function acquisitionMap(shard: Shard, steps: number[]): AcquisitionMap | 
   return { layers, positions, firstIdx, finalTop }
 }
 
+export interface DiffMap {
+  layers: number
+  positions: number
+  /** per cell: did the top-1 flip between the two steps? */
+  flipped: boolean[][]
+  /** per cell: 1 - Jaccard(top-10 ids) — 0 = same candidate set, 1 = fully replaced */
+  change: number[][]
+  refTop: TopEntry[][]
+  curTop: TopEntry[][]
+}
+
+/** What changed between two checkpoints, per (layer, pos) cell — computed from the shard's
+ * stored top-10 lists (exact turnover of the candidate sets; probabilities via TopEntry). */
+export function diffMap(shard: Shard, refStep: number, curStep: number): DiffMap | null {
+  const ref = shard.steps[String(refStep)]
+  const cur = shard.steps[String(curStep)]
+  if (!ref || !cur) return null
+  const vocab = shard.vocab
+  const entry = (cell: [number, number][]): TopEntry => [vocab[String(cell[0][0])] ?? '?', cell[0][1], cell[0][0]]
+  const layers = cur.top.length
+  const positions = cur.top[0].length
+  const flipped: boolean[][] = []
+  const change: number[][] = []
+  const refTop: TopEntry[][] = []
+  const curTop: TopEntry[][] = []
+  for (let li = 0; li < layers; li++) {
+    flipped.push([])
+    change.push([])
+    refTop.push([])
+    curTop.push([])
+    for (let t = 0; t < positions; t++) {
+      const a = ref.top[li][t]
+      const b = cur.top[li][t]
+      flipped[li].push(a[0][0] !== b[0][0])
+      const setA = new Set(a.map(([id]) => id))
+      let inter = 0
+      for (const [id] of b) if (setA.has(id)) inter++
+      change[li].push(1 - inter / (setA.size + b.length - inter))
+      refTop[li].push(entry(a))
+      curTop[li].push(entry(b))
+    }
+  }
+  return { layers, positions, flipped, change, refTop, curTop }
+}
+
 /**
  * Layer profile at one (pos, step): the classic logit-lens curve, p vs layer, for the
  * prompt's target tokens. Returns [{id, token, points: [[layer, prob, rank], ...]}].
