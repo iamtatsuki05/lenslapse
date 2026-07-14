@@ -39,11 +39,10 @@ export default defineConfig({
     target: 'es2022',
     chunkSizeWarningLimit: 2000,
     rollupOptions: {
-      // Multi-page build: the app plus the EN/JA project landing pages under /about/.
+      // Multi-page build: the app plus the project landing page under /about/.
       input: {
         main: resolve(ROOT, 'index.html'),
         about: resolve(ROOT, 'about/index.html'),
-        aboutJa: resolve(ROOT, 'about/ja/index.html'),
       },
     },
   },

@@ -18,8 +18,7 @@ Browser-runnable ONNX conversions of 20 log-spaced **training checkpoints** each
 [pythia-70m](https://huggingface.co/EleutherAI/pythia-70m), and
 [pythia-160m](https://huggingface.co/EleutherAI/pythia-160m), plus the final checkpoint of
 [GPT-2 124M](https://huggingface.co/openai-community/gpt2), packaged for the
-[LensLapse](https://iamtatsuki05.github.io/lenslapse/) in-browser logit-lens demo
-(AACL-IJCNLP 2026 System Demonstrations submission).
+[LensLapse](https://iamtatsuki05.github.io/lenslapse/) in-browser logit-lens demo.
 
 ## Contents
 

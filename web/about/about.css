@@ -1,5 +1,5 @@
-/* Landing-page stylesheet for /about/ (EN + JA). Independent from the app's
-   src/style.css but reuses its design tokens so the two feel like one site. */
+/* Landing-page stylesheet for /about/. Independent from the app's src/style.css
+   but reuses its design tokens so the two feel like one site. */
 
 :root {
   color-scheme: light dark;
@@ -28,8 +28,6 @@ body {
     system-ui,
     -apple-system,
     'Segoe UI',
-    'Hiragino Sans',
-    'Noto Sans JP',
     sans-serif;
   background: var(--bg);
   color: var(--text);
@@ -56,43 +54,10 @@ code {
   padding: 20px 20px 40px;
 }
 
-/* ---------- top bar (language switch) ---------- */
-.top-bar {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.chip {
-  display: inline-block;
-  padding: 3px 11px;
-  border-radius: 999px;
-  background: var(--chip-bg);
-  font-size: 13px;
-  border: 1px solid transparent;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.chip:hover {
-  border-color: var(--accent);
-}
-
 /* ---------- hero ---------- */
 .hero {
   text-align: center;
   padding: 28px 0 12px;
-}
-
-.hero .venue {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  display: inline-block;
-  padding: 3px 14px;
-  font-size: 12.5px;
-  letter-spacing: 0.03em;
 }
 
 .hero .logo {
