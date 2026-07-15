@@ -143,9 +143,12 @@ def test_tokenize_uses_the_models_own_tokenizer(
         def convert_ids_to_tokens(self, ids: list) -> list:
             return [f"tok{i}" for i in ids]
 
+        def convert_tokens_to_string(self, tokens: list) -> str:
+            return "".join(tokens)  # plain stub vocab strings carry no marker to reverse
+
     class StubAuto:
         @staticmethod
-        def from_pretrained(ref: str, revision: str | None = None) -> StubTok:
+        def from_pretrained(ref: str, revision: str | None = None, trust_remote_code: bool = False) -> StubTok:
             return StubTok()
 
     monkeypatch.setattr(server, "AutoTokenizer", StubAuto)

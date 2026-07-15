@@ -1,17 +1,25 @@
 """Resolve a model source into (load_ref, revision, step) tuples for export/precompute.
 
-Three source shapes are supported:
-  1. Hub suite   : --model EleutherAI/pythia-70m --steps 0,1000,...   -> revisions step{N}
-  2. Hub single  : --model gpt2 --final-only                          -> revision main, step 0
-  3. Local dir   : --model /path/to/run --local-checkpoints           -> checkpoint-*/ subdirs
-                   (Hugging Face Trainer layout; the number suffix is the training step), or a
-                   plain single-model directory when no checkpoint-* subdirs exist.
+Four source shapes are supported:
+  1. Hub suite     : --model EleutherAI/pythia-70m --steps 0,1000,...   -> revisions step{N}
+  2. Hub single    : --model gpt2 --final-only                          -> revision main, step 0
+  3. Local dir     : --model /path/to/run --local-checkpoints           -> checkpoint-*/ subdirs
+                     (Hugging Face Trainer layout; the number suffix is the training step), or a
+                     plain single-model directory when no checkpoint-* subdirs exist.
+  4. Hub subfolder : --model m-a-p/neo_scalinglaw_250M --subfolder-map "16780:hf_ckpt/16.78B,..."
+                     for repos that nest each checkpoint as a subfolder within a single revision
+                     rather than using git revisions per checkpoint (seen on Megatron-derived HF
+                     exports that keep the raw training state and converted HF-format weights in
+                     the same repo, e.g. MAP-Neo, BAAI Aquila).
 """
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
 # Shared across server.py (registry/argparse) and client.py (argparse) — defined here, not in
 # server.py, because this module has no torch/fastapi import: client.py's HTTP-only path must
@@ -26,8 +34,9 @@ DTYPE_CHOICES: tuple[DType, ...] = ("float32", "float16", "bfloat16", "auto")
 @dataclass
 class CheckpointSource:
     load_ref: str  # HF id or local path passed to from_pretrained
-    revision: str | None  # HF revision, None for local paths
+    revision: str | None  # HF revision, None for local paths and subfolder sources
     step: int  # slider position in the app
+    subfolder: str | None = None  # path within load_ref, for hub-subfolder sources (shape 4 above)
 
     @property
     def name(self) -> str:
@@ -58,3 +67,61 @@ def resolve_sources(
 def _ckpt_step(p: Path) -> int | None:
     m = re.fullmatch(r"checkpoint-(\d+)", p.name)
     return int(m.group(1)) if m else None
+
+
+def resolve_subfolder_sources(model: str, subfolder_map: str) -> list[CheckpointSource]:
+    """Hub subfolder suite (shape 4): subfolder_map is "step:path,step:path,...", e.g.
+    "16780:hf_ckpt/16.78B,33550:hf_ckpt/33.55B". step is whatever synthetic slider value the
+    caller has already decided on (e.g. tokens in millions when the repo labels checkpoints by
+    tokens rather than optimizer steps) — this function does no unit conversion of its own."""
+    by_step: dict[int, str] = {}  # last one wins on a duplicate step, matching resolve_sources' dedup
+    for pair in subfolder_map.split(","):
+        step_s, sub = pair.split(":", 1)
+        by_step[int(step_s)] = sub
+    return [CheckpointSource(model, None, step, subfolder=sub) for step, sub in sorted(by_step.items())]
+
+
+def resolve_tokenizer_ref(tokenizer_ref: str | None, fallback: CheckpointSource) -> tuple[str, str | None, str]:
+    """Where to load the tokenizer from: `tokenizer_ref` ("repo_id" or "repo_id@revision") when
+    given, else the same ref as `fallback` (typically sources[0]). Returns
+    (load_ref, revision, subfolder) ready to splat into AutoTokenizer.from_pretrained(...).
+
+    A --tokenizer-ref override is for repos where the per-checkpoint tokenizer files don't load
+    cleanly (bigscience/bloom-*-intermediate, a transformers-version incompatibility) or live in a
+    separate repo entirely (m-a-p/neo_scalinglaw_*, whose tokenizer is only published under
+    m-a-p/neo_7b) — always safe when it applies, since the tokenizer is identical across
+    checkpoints of the same pretraining run.
+    """
+    if not tokenizer_ref:
+        return fallback.load_ref, fallback.revision, fallback.subfolder or ""
+    ref, _, rev = tokenizer_ref.partition("@")
+    return ref, (rev or None), ""
+
+
+_WORD_START_MARKERS = ("Ġ", "▁")  # GPT-2-style byte-level BPE and SentencePiece, respectively
+
+
+def token_display_text(tok: "PreTrainedTokenizerBase", t: str | bytes | None) -> str:
+    """convert_ids_to_tokens returns each token in the tokenizer's internal vocab representation,
+    not display text: raw bytes for tiktoken-based tokenizers (e.g. QWenTokenizer, not always
+    valid standalone UTF-8 and never JSON-serializable as-is), and for byte-level BPE tokenizers
+    (GPT-2/Pythia/BLOOM) a per-byte visible-codepoint encoding that renders non-ASCII text (e.g.
+    Chinese) as mojibake unless reversed. convert_tokens_to_string() undoes both, but called on a
+    single token it also treats that token as the start of a decoded string and drops (rather than
+    converts to a real space) a leading word-start marker (confirmed on SentencePiece; GPT-2-style
+    byte-level BPE already returns a leading space unchanged) — reattach one when the raw token
+    asked for it and the conversion ate it, so every layer's word-initial predictions still read as
+    "starts a new word" instead of silently looking like mid-word continuations. This is
+    tooltip/grid display text, not round-tripped byte-exactly, so a lossy decode is fine.
+
+    None means the id has no vocab entry at all — some checkpoints (e.g. BLOOM) pad the
+    embedding/lm_head matrix past the tokenizer's real vocab size for hardware alignment, and an
+    undertrained layer can assign a padding id nonzero top-k probability. '?' matches the
+    frontend's own fallback (web/src/data.ts) for a vocab id it can't find."""
+    if t is None:
+        return "?"
+    s = t.decode("utf-8", errors="replace") if isinstance(t, bytes) else t
+    converted = tok.convert_tokens_to_string([s])
+    if s[:1] in _WORD_START_MARKERS and not converted.startswith(" "):
+        converted = " " + converted
+    return converted

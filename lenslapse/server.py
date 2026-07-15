@@ -51,7 +51,7 @@ from pydantic import BaseModel, ValidationError
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .precompute_lens import lens_all
-from .sources import DTYPE_CHOICES, MODE_CHOICES, CheckpointSource, DType, Mode, resolve_sources
+from .sources import DTYPE_CHOICES, MODE_CHOICES, CheckpointSource, DType, Mode, resolve_sources, token_display_text
 
 TOPK = 10
 MAX_TOKENS = 64
@@ -301,7 +301,7 @@ def load(src: CheckpointSource) -> tuple[Any, Any]:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         print(f"evicted {old_key}", flush=True)
-    tok = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision)
+    tok = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision, trust_remote_code=True)
     # float32 by default: half-precision *compute* flips late-checkpoint top-1s (5/56 cells on
     # Pythia-70M step 143k), the same failure mode that ruled out int8 storage — the browser
     # path avoids it by casting fp16 weights to fp32 at session load, and the server must match
@@ -572,11 +572,12 @@ def tokenize(req: TokenizeRequest) -> TokenizeResponse:
     if key not in TOKENIZERS:
         while len(TOKENIZERS) >= 8:
             TOKENIZERS.popitem(last=False)
-        TOKENIZERS[key] = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision)
+        TOKENIZERS[key] = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision, trust_remote_code=True)
     tok = TOKENIZERS[key]
     # no special tokens: the app tracks the first content token, which must never be a BOS
     ids = tok(req.text, add_special_tokens=False)["input_ids"]
-    return {"ids": [int(i) for i in ids], "tokens": tok.convert_ids_to_tokens(ids)}
+    tokens = [token_display_text(tok, t) for t in tok.convert_ids_to_tokens(ids)]
+    return {"ids": [int(i) for i in ids], "tokens": tokens}
 
 
 def probe_cache_key(src: CheckpointSource, req: ProbeRequest) -> str:
@@ -631,11 +632,11 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     cells = [
         [
             {
-                "token": tok.convert_ids_to_tokens([int(top.indices[li, t, 0])])[0],
+                "token": token_display_text(tok, tok.convert_ids_to_tokens([int(top.indices[li, t, 0])])[0]),
                 "prob": float(top.values[li, t, 0]),
                 "top": [
                     [
-                        tok.convert_ids_to_tokens([int(top.indices[li, t, k])])[0],
+                        token_display_text(tok, tok.convert_ids_to_tokens([int(top.indices[li, t, k])])[0]),
                         float(top.values[li, t, k]),
                         int(top.indices[li, t, k]),
                     ]
@@ -652,7 +653,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
             raise HTTPException(400, f"target id {tid} is outside the vocabulary (0..{lp.shape[-1] - 1})")
         ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
         tgt[str(tid)] = {
-            "token": tok.convert_ids_to_tokens([tid])[0],
+            "token": token_display_text(tok, tok.convert_ids_to_tokens([tid])[0]),
             "p": [[round(float(x), 6) for x in row] for row in probs[:, :, tid].tolist()],
             "r": [[int(x) for x in row] for row in ranks.tolist()],
         }
@@ -663,7 +664,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
         "revision": src.revision,
         "step": src.step,
         "text": req.text,
-        "tokens": tok.convert_ids_to_tokens(ids),
+        "tokens": [token_display_text(tok, t) for t in tok.convert_ids_to_tokens(ids)],
         "grid": {"layers": lp.shape[0], "positions": lp.shape[1], "cells": cells},
         **({"tgt": tgt} if tgt else {}),
         "timing": {"total": round((t2 - t0) * 1000), "forward": round((t2 - t1) * 1000)},

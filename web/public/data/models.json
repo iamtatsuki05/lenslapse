@@ -22,6 +22,37 @@
       "label": "GPT-2 124M",
       "mode": "final",
       "source": "gpt2"
+    },
+    {
+      "id": "aquila-135m",
+      "hf": "aquila-135m",
+      "label": "Aquila 135M (中文/EN)",
+      "mode": "local",
+      "source": "BAAI/Aquila-135M-Intermediate"
+    },
+    {
+      "id": "mapneo-250m",
+      "hf": "mapneo-250m",
+      "label": "MAP-Neo 250M (中文/EN)",
+      "mode": "local",
+      "source": "m-a-p/neo_scalinglaw_250M"
+    },
+    {
+      "id": "bloom-560m",
+      "hf": "bloom-560m",
+      "label": "BLOOM 560M (多言語)",
+      "mode": "suite",
+      "source": "bigscience/bloom-560m-intermediate",
+      "steps": [
+        1000,
+        10000,
+        100000,
+        200000,
+        300000,
+        400000,
+        500000,
+        600000
+      ]
     }
   ]
 }

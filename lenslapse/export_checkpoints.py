@@ -32,7 +32,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .arch import resolve
 from .onnx_f16 import save_f16
-from .sources import CheckpointSource, resolve_sources
+from .sources import (
+    CheckpointSource,
+    resolve_sources,
+    resolve_subfolder_sources,
+    resolve_tokenizer_ref,
+    token_display_text,
+)
 
 PROBE = "The capital of Japan is the city of"
 
@@ -109,7 +115,9 @@ def build_lens_onnx(model: AutoModelForCausalLM, path: Path) -> None:
 
 def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str, Any]:
     rev = src.name
-    model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=torch.float32)
+    model = AutoModelForCausalLM.from_pretrained(
+        src.load_ref, revision=src.revision, subfolder=src.subfolder or "", dtype=torch.float32
+    )
     model.eval()
     bb = Backbone(model)
 
@@ -166,13 +174,16 @@ def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str,
     top1_match = bool((lf.argmax(-1) == ref_logits.argmax(-1)).all())
     assert top1_match, f"{rev}: f16 top-1 disagrees with torch on the probe — do not ship this checkpoint"
 
-    info = {
+    # this is metadata for humans reading the manifest, not something anything parses back, so a
+    # lossy decode (bytes, out-of-vocab ids) is fine — see token_display_text's docstring.
+    top1_token = token_display_text(tok, tok.convert_ids_to_tokens([int(ref_logits[-1].argmax())])[0])
+    info: dict[str, Any] = {
         "step": src.step,
         "fp32_max_diff": fp32_diff,
         "fp32_top1_match_all_pos": fp32_top1,
         "f16_max_diff": f16_diff,
         "f16_top1_match_all_pos": top1_match,
-        "top1_token": tok.convert_ids_to_tokens([int(ref_logits[-1].argmax())])[0],
+        "top1_token": top1_token,
         "backbone_bytes": bb_f16.stat().st_size,
         "lens_bytes": lens_f16.stat().st_size,
     }
@@ -197,15 +208,42 @@ def main() -> None:
     ap.add_argument(
         "--final-only", action="store_true", help="single checkpoint (revision main) instead of a step suite"
     )
+    ap.add_argument(
+        "--subfolder-map",
+        default=None,
+        help='hub-subfolder suite: "step:path,step:path,..." for repos that nest checkpoints as '
+        "subfolders of one revision instead of using git revisions per checkpoint; overrides --steps",
+    )
+    ap.add_argument(
+        "--revision-template",
+        default="step{}",
+        help='revision naming for hub suites, e.g. "global_step{}" for bigscience/bloom-*-intermediate',
+    )
+    ap.add_argument(
+        "--tokenizer-ref",
+        default=None,
+        help='load the tokenizer from a different ref than the checkpoint weights, as "repo_id" or '
+        '"repo_id@revision" — for repos where the per-checkpoint tokenizer files do not load cleanly '
+        "(bigscience/bloom-*-intermediate) or live in a separate repo entirely (m-a-p/neo_scalinglaw_*, "
+        "whose tokenizer is only published under m-a-p/neo_7b). The tokenizer is identical across "
+        "checkpoints of the same pretraining run, so this is always safe when it applies.",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    sources = resolve_sources(args.model, args.steps, args.final_only)
-    tok = AutoTokenizer.from_pretrained(sources[0].load_ref, revision=sources[0].revision)
+    sources = (
+        resolve_subfolder_sources(args.model, args.subfolder_map)
+        if args.subfolder_map
+        else resolve_sources(args.model, args.steps, args.final_only, args.revision_template)
+    )
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(args.tokenizer_ref, sources[0])
+    tok = AutoTokenizer.from_pretrained(
+        tok_load_ref, revision=tok_rev, subfolder=tok_subfolder, trust_remote_code=True
+    )
 
     cfg_model = AutoModelForCausalLM.from_pretrained(
-        sources[0].load_ref, revision=sources[0].revision, dtype=torch.float32
+        sources[0].load_ref, revision=sources[0].revision, subfolder=sources[0].subfolder or "", dtype=torch.float32
     )
     meta = {
         "model": args.model,

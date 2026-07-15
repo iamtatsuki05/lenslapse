@@ -10,6 +10,9 @@ Supported sources (see sources.py):
   Hub single   : python add_model.py --model gpt2 --id gpt2 --label "GPT-2 124M" --final-only ...
   Local run dir: python add_model.py --model /path/to/trainer_output --id my-run --label "My run" ...
                  (Hugging Face Trainer layout: checkpoint-<step>/ subdirectories)
+  Hub subfolder: python add_model.py --model m-a-p/neo_scalinglaw_250M --id mapneo-250m --label "MAP-Neo" \
+                     --subfolder-map "16780:hf_ckpt/16.78B,33550:hf_ckpt/33.55B" --models-root /path/to/models
+                 (checkpoints nested as subfolders within one revision; overrides --steps)
 
 After it finishes: rebuild the web app, and upload <models-root>/<id>/ to your static model host.
 """
@@ -23,7 +26,7 @@ from pathlib import Path
 
 from transformers import AutoTokenizer
 
-from .sources import Mode, resolve_sources
+from .sources import Mode, resolve_sources, resolve_subfolder_sources, resolve_tokenizer_ref
 
 # present in a repo checkout; absent when the package was pip-installed
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -51,6 +54,22 @@ def main() -> None:
     ap.add_argument("--models-root", required=True, help="directory that holds <id>/step*/... for the model host")
     ap.add_argument("--skip-export", action="store_true", help="only precompute + register")
     ap.add_argument("--force", action="store_true", help="overwrite an id that is already registered")
+    ap.add_argument(
+        "--subfolder-map",
+        default=None,
+        help='hub-subfolder suite: "step:path,step:path,..." — see export_checkpoints.py; overrides --steps',
+    )
+    ap.add_argument("--prompts-file", default=None, help="JSON curated-prompt list; see precompute_lens.py")
+    ap.add_argument(
+        "--revision-template",
+        default="step{}",
+        help='revision naming for hub suites, e.g. "global_step{}" for bigscience/bloom-*-intermediate',
+    )
+    ap.add_argument(
+        "--tokenizer-ref",
+        default=None,
+        help="load the tokenizer from a different ref than the checkpoint weights; see export_checkpoints.py",
+    )
     args = ap.parse_args()
 
     # Without a web/ checkout (pip install), only the ONNX export is possible; the precomputed
@@ -67,19 +86,35 @@ def main() -> None:
         if any(m["id"] == args.id for m in catalog["models"]) and not args.force:
             sys.exit(f"model id {args.id!r} is already registered in {models_json}; rerun with --force to overwrite")
 
-    sources = resolve_sources(args.model, args.steps, args.final_only)
+    sources = (
+        resolve_subfolder_sources(args.model, args.subfolder_map)
+        if args.subfolder_map
+        else resolve_sources(args.model, args.steps, args.final_only, args.revision_template)
+    )
     print(f"{len(sources)} checkpoint(s): steps {[s.step for s in sources]}")
 
     common = ["--model", args.model, "--steps", args.steps] + (["--final-only"] if args.final_only else [])
+    if args.subfolder_map:
+        common += ["--subfolder-map", args.subfolder_map]
+    if args.revision_template != "step{}":
+        common += ["--revision-template", args.revision_template]
+    if args.tokenizer_ref:
+        common += ["--tokenizer-ref", args.tokenizer_ref]
     if not args.skip_export:
         run("export_checkpoints", [*common, "--out", str(Path(args.models_root) / args.id), "--skip-existing"])
     if not in_repo:
         print(f"exported {Path(args.models_root) / args.id}; upload it to your model host to use it in the app")
         return
-    run("precompute_lens", [*common, "--out", str(WEB / "public" / "data" / args.id)])
+    precompute_args = [*common, "--out", str(WEB / "public" / "data" / args.id)]
+    if args.prompts_file:
+        precompute_args += ["--prompts-file", args.prompts_file]
+    run("precompute_lens", precompute_args)
 
     # tokenizer for the app (served locally; the app never fetches tokenizers remotely)
-    tok = AutoTokenizer.from_pretrained(sources[0].load_ref, revision=sources[0].revision)
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(args.tokenizer_ref, sources[0])
+    tok = AutoTokenizer.from_pretrained(
+        tok_load_ref, revision=tok_rev, subfolder=tok_subfolder, trust_remote_code=True
+    )
     tok_dir = WEB / "public" / "tokenizer" / args.id
     tok.save_pretrained(tok_dir)
 
@@ -96,8 +131,10 @@ def main() -> None:
     assert catalog is not None  # in_repo is True on this path, so the catalog was loaded above
     entry = {"id": args.id, "hf": args.id, "label": args.label, "mode": mode, "source": args.model}
     if mode == "suite":
-        # record the step grid: consumers with no shard data (e.g. the probe server) need it
-        entry["steps"] = sorted({int(s) for s in args.steps.split(",")})
+        # record the step grid: consumers with no shard data (e.g. the probe server) need it.
+        # Derived from the resolved sources, not args.steps directly — a --subfolder-map suite's
+        # real step values live only on `sources`, not in the (irrelevant, default-valued) --steps.
+        entry["steps"] = sorted({s.step for s in sources})
     catalog["models"] = [m for m in catalog["models"] if m["id"] != args.id] + [entry]
     tmp = models_json.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(catalog, indent=2) + "\n")

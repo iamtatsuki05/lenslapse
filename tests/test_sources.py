@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from lenslapse.sources import resolve_sources
+from lenslapse.sources import CheckpointSource, resolve_sources, resolve_subfolder_sources, resolve_tokenizer_ref
 
 
 def test_hub_suite_maps_steps_to_revisions() -> None:
@@ -38,3 +38,31 @@ def test_trainer_directory_rejects_final_only(tmp_path: Path) -> None:
 def test_plain_local_directory_is_a_single_step_zero_checkpoint(tmp_path: Path) -> None:
     (src,) = resolve_sources(str(tmp_path), "0", final_only=False)
     assert (src.load_ref, src.revision, src.step) == (str(tmp_path), None, 0)
+
+
+def test_subfolder_suite_maps_steps_to_subfolders_sorted_by_step() -> None:
+    sources = resolve_subfolder_sources("m-a-p/neo_scalinglaw_250M", "33550:hf_ckpt/33.55B,16780:hf_ckpt/16.78B")
+    assert [(s.load_ref, s.revision, s.step, s.subfolder) for s in sources] == [
+        ("m-a-p/neo_scalinglaw_250M", None, 16780, "hf_ckpt/16.78B"),
+        ("m-a-p/neo_scalinglaw_250M", None, 33550, "hf_ckpt/33.55B"),
+    ]
+
+
+def test_hub_suite_sources_have_no_subfolder() -> None:
+    (src,) = resolve_sources("EleutherAI/pythia-70m", "0", final_only=False)
+    assert src.subfolder is None
+
+
+def test_tokenizer_ref_falls_back_to_the_checkpoint_source_when_unset() -> None:
+    fallback = CheckpointSource("m-a-p/neo_scalinglaw_250M", None, 16780, subfolder="hf_ckpt/16.78B")
+    assert resolve_tokenizer_ref(None, fallback) == ("m-a-p/neo_scalinglaw_250M", None, "hf_ckpt/16.78B")
+
+
+def test_tokenizer_ref_override_without_revision() -> None:
+    fallback = CheckpointSource("bigscience/bloom-560m-intermediate", "global_step1000", 1000)
+    assert resolve_tokenizer_ref("bigscience/bloom-560m", fallback) == ("bigscience/bloom-560m", None, "")
+
+
+def test_tokenizer_ref_override_with_revision() -> None:
+    fallback = CheckpointSource("some/repo", "step0", 0)
+    assert resolve_tokenizer_ref("some/other-repo@main", fallback) == ("some/other-repo", "main", "")

@@ -25,7 +25,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .arch import resolve
-from .sources import resolve_sources
+from .sources import resolve_sources, resolve_subfolder_sources, resolve_tokenizer_ref, token_display_text
 
 PROMPTS = [
     {"text": "The capital of Japan is the city of", "gold": " Tokyo", "story": "fact"},
@@ -87,18 +87,47 @@ def main() -> None:
     ap.add_argument(
         "--final-only", action="store_true", help="single checkpoint (revision main) instead of a step suite"
     )
+    ap.add_argument(
+        "--subfolder-map",
+        default=None,
+        help='hub-subfolder suite: "step:path,step:path,..." — see export_checkpoints.py; overrides --steps',
+    )
+    ap.add_argument(
+        "--prompts-file",
+        default=None,
+        help="JSON file with the same shape as PROMPTS (list of {text, gold, story}); "
+        "defaults to the built-in English curated set",
+    )
+    ap.add_argument(
+        "--revision-template",
+        default="step{}",
+        help='revision naming for hub suites, e.g. "global_step{}" for bigscience/bloom-*-intermediate',
+    )
+    ap.add_argument(
+        "--tokenizer-ref",
+        default=None,
+        help="load the tokenizer from a different ref than the checkpoint weights; see export_checkpoints.py",
+    )
     args = ap.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    sources = resolve_sources(args.model, args.steps, args.final_only)
+    sources = (
+        resolve_subfolder_sources(args.model, args.subfolder_map)
+        if args.subfolder_map
+        else resolve_sources(args.model, args.steps, args.final_only, args.revision_template)
+    )
     by_step = {src.step: src for src in sources}
     steps = sorted(by_step)
     final_step = steps[-1]
-    tok = AutoTokenizer.from_pretrained(sources[0].load_ref, revision=sources[0].revision)
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(args.tokenizer_ref, sources[0])
+    tok = AutoTokenizer.from_pretrained(
+        tok_load_ref, revision=tok_rev, subfolder=tok_subfolder, trust_remote_code=True
+    )
 
+    prompt_defs = json.loads(Path(args.prompts_file).read_text()) if args.prompts_file else PROMPTS
     prompts: list[dict[str, Any]] = []
-    for i, p in enumerate(PROMPTS):
+    for i, p in enumerate(prompt_defs):
         ids = tok(p["text"])["input_ids"]
         # no special tokens: a BOS-prepending tokenizer (Llama-style) would make gold_id the BOS id
         gold_id = tok(p["gold"], add_special_tokens=False)["input_ids"][0]
@@ -111,7 +140,9 @@ def main() -> None:
 
     for step in order:
         src = by_step[step]
-        model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=torch.float32)
+        model = AutoModelForCausalLM.from_pretrained(
+            src.load_ref, revision=src.revision, subfolder=src.subfolder or "", dtype=torch.float32
+        )
         model.eval()
         for p in prompts:
             ids = torch.tensor([p["ids"]])
@@ -148,7 +179,7 @@ def main() -> None:
             sh["steps"][str(step)] = entry
             ref_ids = {int(i) for layer in entry["top"] for pos in layer for i, _ in pos} | set(all_tgt_ids)
             for tid in ref_ids:
-                sh["vocab"].setdefault(str(tid), tok.convert_ids_to_tokens([tid])[0])
+                sh["vocab"].setdefault(str(tid), token_display_text(tok, tok.convert_ids_to_tokens([tid])[0]))
         del model
         print(f"[step{step}] done", flush=True)
 
@@ -166,7 +197,7 @@ def main() -> None:
                     "gold_id": p["gold_id"],
                     "story": p["story"],
                     "ids": p["ids"],
-                    "tokens": tok.convert_ids_to_tokens(p["ids"]),
+                    "tokens": [token_display_text(tok, t) for t in tok.convert_ids_to_tokens(p["ids"])],
                     "targets": targets.get(p["id"], []),
                 }
                 for p in prompts
