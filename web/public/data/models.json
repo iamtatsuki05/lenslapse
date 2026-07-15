@@ -28,41 +28,6 @@
       "languages": ["en"]
     },
     {
-      "id": "local-14m",
-      "hf": "local-14m",
-      "label": "My local run",
-      "mode": "local",
-      "source": "/private/tmp/claude-501/-Users-tatsuki-src---NAIST/ae0d1491-b747-4818-804d-3172d8d2b2ac/scratchpad/local-run"
-    },
-    {
-      "id": "Llama-EN-0.5B-PT",
-      "hf": "Llama-EN-0.5B-PT",
-      "label": "Llama-EN-0.5B-PT",
-      "mode": "local",
-      "source": "/Users/tatsuki/Downloads/Llama-EN-0.5B-PT-checkpoints-minimal-20260714/stage1"
-    },
-    {
-      "id": "llama0.5b",
-      "hf": "llama0.5b",
-      "label": "test",
-      "mode": "local",
-      "source": "/Users/tatsuki/Downloads/llama0.5B"
-    },
-    {
-      "id": "stage1",
-      "hf": "stage1",
-      "label": "stage1",
-      "mode": "local",
-      "source": "/Users/tatsuki/Downloads/Llama-EN-0.5B-PT-checkpoints-minimal-20260714/stage1"
-    },
-    {
-      "id": "llama-0.5b-stage1",
-      "hf": "llama-0.5b-stage1",
-      "label": "Llama-EN 0.5B stage1",
-      "mode": "local",
-      "source": "/Users/tatsuki/Downloads/Llama-EN-0.5B-PT-checkpoints-minimal-20260714/stage1"
-    },
-    {
       "id": "aquila-135m",
       "hf": "aquila-135m",
       "label": "Aquila 135M",
