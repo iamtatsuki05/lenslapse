@@ -3,7 +3,7 @@
 **A fully in-browser time-lapse for the logit lens: scrub across Pythia's public training checkpoints and watch next-token predictions crystallize from noise into knowledge — layer by layer, with zero backend.**
 
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
-- **Four shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, plus GPT-2 124M (final checkpoint) — switchable in the header; the recipe itself is architecture-generic (GPT-NeoX, GPT-2, and Llama-style RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`).
+- **Seven shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, GPT-2 124M (final checkpoint), and three multilingual suites unchanged by the same recipe: MAP-Neo-250M and BAAI Aquila-135M (Chinese/English, Hub-subfolder checkpoints), and BLOOM-560M (46 languages, `global_step{N}` revisions) — switchable in the header. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, and Mistral-style RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`).
 - **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3× pixel density) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
 - Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
@@ -84,11 +84,21 @@ uv run python -m lenslapse.check_arch_parity --model gpt2      # lens-identity c
 uv run lenslapse add-model --model EleutherAI/pythia-31m --id pythia-31m --label "Pythia 31M"     --steps 0,512,8000,143000 --models-root /path/to/models
 uv run lenslapse add-model --model gpt2 --id gpt2 --label "GPT-2 124M" --final-only --models-root /path/to/models
 uv run lenslapse add-model --model /path/to/trainer_output --id my-run --label "My run" --models-root /path/to/models
+
+# repos that nest each checkpoint as a Hub subfolder within one revision instead of a git revision
+# per checkpoint (e.g. MAP-Neo, BAAI Aquila), a non-default revision naming (BLOOM's global_step{N}),
+# and a tokenizer loaded from a different ref than the checkpoint weights:
+uv run lenslapse add-model --model m-a-p/neo_scalinglaw_250M --id mapneo-250m --label "MAP-Neo 250M" \
+  --subfolder-map "16780:hf_ckpt/16.78B,33550:hf_ckpt/33.55B" --models-root /path/to/models
+uv run lenslapse add-model --model bigscience/bloom-560m-intermediate --id bloom-560m --label "BLOOM 560M" \
+  --steps 1000,10000,100000 --revision-template "global_step{}" --tokenizer-ref bigscience/bloom-560m \
+  --models-root /path/to/models
 ```
 
 One command exports the ONNX pairs (parity-checked), precomputes the lens shards, installs the
 tokenizer, and registers the model in `models.json` — adding a model is a data change, not a code
-change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style RMSNorm verified).
+change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style RMSNorm / Mistral-style
+RMSNorm verified).
 
 ## Heavy models: the local probe server
 
@@ -185,4 +195,8 @@ execution providers (WebGPU/WASM), emulated CPU throttling, model sizes, and pro
 
 ## License
 
-MIT. Pythia checkpoints are © EleutherAI, Apache-2.0; GPT-2 weights are © OpenAI, MIT (Modified).
+MIT. Pythia checkpoints are © EleutherAI, Apache-2.0; GPT-2 weights are © OpenAI, MIT (Modified);
+MAP-Neo and BAAI Aquila checkpoints are Apache-2.0. **BLOOM checkpoints are © BigScience Workshop,
+licensed under the BigScience RAIL License v1.0** — not a plain permissive license like the others
+here; it attaches use-based behavioral restrictions to downstream recipients. See
+`docs/model-card.md` for the full attribution and license text for every suite.

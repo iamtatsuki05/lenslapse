@@ -17,8 +17,10 @@ Notes:
 - Layout is one directory per model id:
   `<model-id>/manifest.json` + `<model-id>/step{N}/backbone.f16.onnx` + `<model-id>/step{N}/lens.f16.onnx`,
   with model ids matching `web/public/data/models.json` (e.g. `pythia-14m`, `pythia-70m`,
-  `pythia-160m`, `gpt2`).
-- Add `docs/model-card.md` as the repo README.
+  `pythia-160m`, `gpt2`, `mapneo-250m`, `aquila-135m`, `bloom-560m`).
+- Add `docs/model-card.md` as the repo README — re-upload it (`hf upload iamtatsuki05/lenslapse-onnx
+  docs/model-card.md README.md`) whenever it changes; the file living in the checkout does not sync
+  itself.
 
 ## 2. Point the app at the repo
 
@@ -38,15 +40,18 @@ If none is reachable it degrades to precomputed-only mode with a status badge (n
 3. The included workflow (`.github/workflows/deploy-pages.yml`) builds `web/` and deploys `web/dist`
    on every push to `main`.
 
-The built site is ~65MB (two ONNX Runtime WASM binaries ~44MB + precomputed shards ~15MB + app
-assets), well under the 1GB Pages limit. Model weights are **not** part of the site.
+The built site is ~160MB for the seven shipped models (two ONNX Runtime WASM binaries ~44MB +
+precomputed shards ~58MB + tokenizer files ~28MB + app assets ~46MB), well under the 1GB Pages
+limit. Model *weights* are **not** part of the site — only the small per-model tokenizer directories
+that the live-probe path and the free-text tokenizer feature need locally.
 
 ## Verification checklist after deploy
 
 - [ ] Page loads and the lens grid renders for the default prompt (precomputed, no download).
 - [ ] Slider scrubbing updates the grid; ticks show live-capable diamonds.
-- [ ] The model picker switches between the shipped models — Pythia 14M / 70M / 160M and GPT-2
-      (steps and grid depth change).
+- [ ] The model picker switches between the shipped models — Pythia 14M / 70M / 160M, GPT-2, and
+      the multilingual MAP-Neo-250M / Aquila-135M / BLOOM-560M suites (steps and grid depth change;
+      the three multilingual suites are precomputed-only, no live-probe diamonds).
 - [ ] Clicking a cell pins it and draws trajectories; the permalink button reproduces the exact view
       (including the selected model).
 - [ ] Live probe on a free-text prompt downloads one checkpoint (~29MB for 14M, ~142MB for 70M,
