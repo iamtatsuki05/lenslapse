@@ -32,6 +32,10 @@ three multilingual suites and, separately, four more decoder architecture famili
 otherwise change the recipe's own claim (see Contents below for the full list and what's proved by
 each one).
 
+- **Code:** https://github.com/iamtatsuki05/lenslapse
+- **Project page:** https://iamtatsuki05.github.io/lenslapse/about/
+- **Demo video:** https://www.youtube.com/watch?v=OBnvG9Ru3j8
+
 ## Contents
 
 One directory per model (`pythia-14m/`, `pythia-70m/`, `pythia-160m/`, `gpt2/`, `mapneo-250m/`,
