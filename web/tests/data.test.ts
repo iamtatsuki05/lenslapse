@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { gridFromShard, trajectoryFromShard } from '../src/data'
-import type { Prompt, Shard } from '../src/data'
+import { gridFromShard, languageTag, promptLang, promptLangLabel, trajectoryFromShard } from '../src/data'
+import type { ModelEntry, Prompt, Shard } from '../src/data'
 
 // Minimal 2-layer × 2-position shard with two steps (0 and 128); step 64 is deliberately absent.
 // Token id 99 has no vocab entry so it must render as '?'.
@@ -161,5 +161,55 @@ describe('trajectoryFromShard', () => {
 
   it('returns an empty list when the position has no targets', () => {
     expect(trajectoryFromShard(shard, prompt, 1, 5, [0, 128])).toEqual([])
+  })
+})
+
+describe('languageTag', () => {
+  const entry = (languages?: string[], languageLabel?: string): ModelEntry => ({
+    id: 'm',
+    hf: 'm',
+    ...(languages ? { languages } : {}),
+    ...(languageLabel ? { languageLabel } : {}),
+  })
+
+  it('returns null for a model with no languages on file', () => {
+    expect(languageTag(entry())).toBeNull()
+  })
+
+  it('returns null for a single-language (English-only) model', () => {
+    expect(languageTag(entry(['en']))).toBeNull()
+  })
+
+  it('joins two or more known language codes by name', () => {
+    expect(languageTag(entry(['zh', 'en']))).toBe('Chinese/English')
+  })
+
+  it('falls back to the raw code for an unrecognized language', () => {
+    expect(languageTag(entry(['fr', 'en']))).toBe('fr/English')
+  })
+
+  it('prefers an explicit languageLabel override over the derived tag', () => {
+    expect(languageTag(entry(['zh', 'en'], 'Multilingual'))).toBe('Multilingual')
+  })
+})
+
+describe('promptLang', () => {
+  it('detects English text with no CJK characters', () => {
+    expect(promptLang('The capital of Japan is the city of')).toBe('en')
+  })
+
+  it('detects Chinese text containing CJK ideographs', () => {
+    expect(promptLang('中国的首都是')).toBe('zh')
+  })
+
+  it('detects Chinese text mixed with Latin punctuation/digits', () => {
+    expect(promptLang('# 计算两数之和\ndef add(a, b):\n    return a +')).toBe('zh')
+  })
+})
+
+describe('promptLangLabel', () => {
+  it('labels zh as 中文 and en as English', () => {
+    expect(promptLangLabel('zh')).toBe('中文')
+    expect(promptLangLabel('en')).toBe('English')
   })
 })

@@ -4,31 +4,71 @@
     {
       "id": "pythia-14m",
       "hf": "EleutherAI/pythia-14m",
-      "label": "Pythia 14M"
+      "label": "Pythia 14M",
+      "languages": ["en"]
     },
     {
       "id": "pythia-70m",
       "hf": "EleutherAI/pythia-70m",
-      "label": "Pythia 70M"
+      "label": "Pythia 70M",
+      "languages": ["en"]
     },
     {
       "id": "pythia-160m",
       "hf": "EleutherAI/pythia-160m",
-      "label": "Pythia 160M"
+      "label": "Pythia 160M",
+      "languages": ["en"]
     },
     {
       "id": "gpt2",
       "hf": "gpt2",
       "label": "GPT-2 124M",
       "mode": "final",
-      "source": "gpt2"
+      "source": "gpt2",
+      "languages": ["en"]
+    },
+    {
+      "id": "local-14m",
+      "hf": "local-14m",
+      "label": "My local run",
+      "mode": "local",
+      "source": "/private/tmp/claude-501/-Users-tatsuki-src---NAIST/ae0d1491-b747-4818-804d-3172d8d2b2ac/scratchpad/local-run"
+    },
+    {
+      "id": "Llama-EN-0.5B-PT",
+      "hf": "Llama-EN-0.5B-PT",
+      "label": "Llama-EN-0.5B-PT",
+      "mode": "local",
+      "source": "/Users/tatsuki/Downloads/Llama-EN-0.5B-PT-checkpoints-minimal-20260714/stage1"
+    },
+    {
+      "id": "llama0.5b",
+      "hf": "llama0.5b",
+      "label": "test",
+      "mode": "local",
+      "source": "/Users/tatsuki/Downloads/llama0.5B"
+    },
+    {
+      "id": "stage1",
+      "hf": "stage1",
+      "label": "stage1",
+      "mode": "local",
+      "source": "/Users/tatsuki/Downloads/Llama-EN-0.5B-PT-checkpoints-minimal-20260714/stage1"
+    },
+    {
+      "id": "llama-0.5b-stage1",
+      "hf": "llama-0.5b-stage1",
+      "label": "Llama-EN 0.5B stage1",
+      "mode": "local",
+      "source": "/Users/tatsuki/Downloads/Llama-EN-0.5B-PT-checkpoints-minimal-20260714/stage1"
     },
     {
       "id": "aquila-135m",
       "hf": "aquila-135m",
-      "label": "Aquila 135M (\u4e2d\u6587/EN)",
+      "label": "Aquila 135M",
       "mode": "suite",
       "source": "BAAI/Aquila-135M-Intermediate",
+      "languages": ["zh", "en"],
       "steps": [
         250000,
         500000,
@@ -42,9 +82,10 @@
     {
       "id": "mapneo-250m",
       "hf": "mapneo-250m",
-      "label": "MAP-Neo 250M (\u4e2d\u6587/EN)",
+      "label": "MAP-Neo 250M",
       "mode": "suite",
       "source": "m-a-p/neo_scalinglaw_250M",
+      "languages": ["zh", "en"],
       "steps": [
         16780,
         33550,
@@ -61,9 +102,11 @@
     {
       "id": "bloom-560m",
       "hf": "bloom-560m",
-      "label": "BLOOM 560M (\u591a\u8a00\u8a9e)",
+      "label": "BLOOM 560M",
       "mode": "suite",
       "source": "bigscience/bloom-560m-intermediate",
+      "languages": ["zh", "en"],
+      "languageLabel": "Multilingual",
       "steps": [
         1000,
         10000,
@@ -82,28 +125,34 @@
       "hf": "smollm2-135m",
       "label": "SmolLM2 135M",
       "mode": "final",
-      "source": "HuggingFaceTB/SmolLM2-135M"
+      "source": "HuggingFaceTB/SmolLM2-135M",
+      "languages": ["en"]
     },
     {
       "id": "qwen3-0.6b",
       "hf": "qwen3-0.6b",
       "label": "Qwen3 0.6B",
       "mode": "final",
-      "source": "Qwen/Qwen3-0.6B"
+      "source": "Qwen/Qwen3-0.6B",
+      "languages": ["zh", "en"],
+      "languageLabel": "Multilingual"
     },
     {
       "id": "opt-125m",
       "hf": "opt-125m",
       "label": "OPT 125M",
       "mode": "final",
-      "source": "facebook/opt-125m"
+      "source": "facebook/opt-125m",
+      "languages": ["en"]
     },
     {
       "id": "gemma3-270m",
       "hf": "gemma3-270m",
       "label": "Gemma 3 270M",
       "mode": "final",
-      "source": "google/gemma-3-270m"
+      "source": "google/gemma-3-270m",
+      "languages": ["zh", "en"],
+      "languageLabel": "Multilingual"
     }
   ]
 }

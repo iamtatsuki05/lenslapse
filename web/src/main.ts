@@ -4,11 +4,14 @@ import {
   diffMap,
   fmtStep,
   gridFromShard,
+  languageTag,
   layerProfileFromShard,
   loadIndex,
   loadModels,
   loadShard,
   nearestStep,
+  promptLang,
+  promptLangLabel,
   trajectoryFromShard,
 } from './data'
 import { LensGrid, cellKey } from './grid'
@@ -31,6 +34,7 @@ import {
 import { legendGradient } from './color'
 import type {
   DiffMap,
+  GridData,
   GridDims,
   GridView,
   ModelCatalog,
@@ -87,6 +91,16 @@ const status = (msg?: string) => {
 
 function modelInfo(id: string | null = state.model): ModelEntry | undefined {
   return catalog!.models.find((m) => m.id === id)
+}
+
+/** Display name for a model-picker option: its label (or hf id/id as a fallback), plus a
+ * language tag when it has one — "BLOOM 560M (Multilingual)", "Aquila 135M (Chinese/English)",
+ * unmarked for English-only models, matching the convention that English needs no tag. */
+function modelLabel(m: ModelEntry | undefined, fallbackId: string): string {
+  if (!m) return fallbackId
+  const base = m.label ?? m.hf ?? m.id
+  const tag = languageTag(m)
+  return tag ? `${base} (${tag})` : base
 }
 
 function getEngine(id: string = state.model!): LiveEngine {
@@ -201,7 +215,23 @@ const compareGrid = new LensGrid($<HTMLCanvasElement>('compare-canvas'), {
 // state.gridView to 'top1' across the awaits below and reject the re-check
 const compareAllowed = (): boolean => state.mode === 'pre' && state.gridView === 'top1'
 
-/** Render the compared model's grid at its checkpoint nearest to the current step. */
+/** Paint the compared model's grid and update its panel chrome — shared by the precomputed and
+ * live-probe-fallback paths below, which differ only in where `g`/`tokens`/`stepLabel` come from. */
+function showCompare(cmpId: string, key: string, g: GridData, tokens: string[], stepLabel: string): void {
+  $('compare-wrap').hidden = false
+  $('compare-title').textContent = modelLabel(modelInfo(cmpId), cmpId)
+  $('compare-step').textContent = stepLabel
+  compareGrid.logScale = state.logColor
+  const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
+  compareGrid.setData(g, tokens, null)
+  prevTop1B = flashTop1Changes(compareGrid, prevTop1B, key, ids)
+}
+
+/** Render the compared model's grid at its checkpoint nearest to the current step: the
+ * precomputed prompt if the compared model has one, else — when the compared model is at least
+ * documented to handle this prompt's language (or has no language info on file to rule it out)
+ * — a live probe of the same text, so a missing precomputed shard doesn't have to mean no
+ * comparison at all. */
 async function refreshCompare(): Promise<void> {
   const wrap = $('compare-wrap')
   if (!state.compareId || !compareAllowed()) {
@@ -210,31 +240,56 @@ async function refreshCompare(): Promise<void> {
   }
   const gen = viewGen
   const cmpId = state.compareId
+  const noCompareData = (reason: string) => {
+    wrap.hidden = true
+    status(`${modelLabel(modelInfo(cmpId), cmpId)} ${reason} — compare is off`)
+  }
   try {
     const cmpIndex = await loadIndex(cmpId)
     if (gen !== viewGen || cmpId !== state.compareId) return
-    const prompt = cmpIndex.prompts.find((p) => p.text === currentPrompt().text)
-    if (!prompt) {
-      wrap.hidden = true
-      status(`${modelInfo(cmpId)?.label ?? cmpId} has no precomputed data for this prompt — compare is off`)
+    const promptText = currentPrompt().text
+    const prompt = cmpIndex.prompts.find((p) => p.text === promptText)
+    if (prompt) {
+      const step = nearestStep(cmpIndex.steps, currentStep())
+      const shard = await loadShard(cmpId, prompt.id)
+      if (gen !== viewGen || cmpId !== state.compareId) return
+      // the acq toggle does not bump viewGen — re-check the entry conditions after every await,
+      // or a slow first shard load could un-hide compare underneath the acquisition map
+      if (!compareAllowed()) return
+      const g = gridFromShard(shard, step)
+      if (!g) return
+      showCompare(cmpId, `${cmpId}:${prompt.id}`, g, prompt.tokens, `step ${step.toLocaleString()} (nearest checkpoint)`)
       return
     }
-    const step = nearestStep(cmpIndex.steps, currentStep())
-    const shard = await loadShard(cmpId, prompt.id)
+    // no precomputed match — an explicitly English-only model asked to compare on Chinese text
+    // would just produce garbage, so only attempt a live probe when there's a real reason to
+    // expect it to work: the compared model is documented to handle this language, or we simply
+    // have no language info on file for it (e.g. a custom-registered model) to rule it out.
+    // `languages` is treated as "unclassified" whether it's absent or an empty array — neither
+    // is a real "no" the way a populated list missing this language is.
+    const cmpLanguages = modelInfo(cmpId)?.languages
+    if (cmpLanguages?.length && !cmpLanguages.includes(promptLang(promptText))) {
+      noCompareData('has no precomputed data for this prompt')
+      return
+    }
+    const engine = getEngine(cmpId)
+    await enginesReady.get(engine.modelId)
     if (gen !== viewGen || cmpId !== state.compareId) return
-    // the acq toggle does not bump viewGen — re-check the entry conditions after every await,
-    // or a slow first shard load could un-hide compare underneath the acquisition map
+    if (!engine.available) {
+      noCompareData('has no precomputed data for this prompt, and live probing is unavailable for it right now')
+      return
+    }
+    // snap to a step this SPECIFIC model actually has, not nearestLiveStep's own-model default of
+    // trusting any server-backed model to resolve any step — true for suite/final modes, but a
+    // "local" mode compared model (checkpoint-* directories with no fixed naming) only resolves
+    // its own exact steps server-side, and the primary model's current step rarely happens to
+    // coincide. cmpIndex.steps is this model's own real precomputed step list (any mode); prefer
+    // it over nearestLiveStep's in-browser-only liveSteps() bookkeeping whenever it's populated.
+    const step = cmpIndex.steps.length ? nearestStep(cmpIndex.steps, currentStep()) : nearestLiveStep(currentStep(), cmpId)
+    const res = await engine.probe(promptText, step)
+    if (gen !== viewGen || cmpId !== state.compareId) return
     if (!compareAllowed()) return
-    const g = gridFromShard(shard, step)
-    if (!g) return
-    wrap.hidden = false
-    $('compare-title').textContent = modelInfo(cmpId)?.label ?? cmpId
-    $('compare-step').textContent = `step ${step.toLocaleString()} (nearest checkpoint)`
-    compareGrid.logScale = state.logColor
-    const key = `${cmpId}:${prompt.id}`
-    const ids = g.cells.map((row) => row.map((c) => c.top[0][2]))
-    compareGrid.setData(g, prompt.tokens, null)
-    prevTop1B = flashTop1Changes(compareGrid, prevTop1B, key, ids)
+    showCompare(cmpId, `${cmpId}:live:${promptText}`, res.grid, res.tokens, `step ${step.toLocaleString()} (live probe)`)
   } catch (e) {
     if (gen === viewGen) {
       wrap.hidden = true
@@ -539,7 +594,10 @@ function randomView(): void {
   viewGen++
   clearTimeout(liveDebounce)
   state.mode = 'pre'
-  const prompt = index.prompts[Math.floor(Math.random() * index.prompts.length)]
+  const picked = index.prompts[Math.floor(Math.random() * index.prompts.length)]
+  // route through the dropdown's own canonical id: a duplicate-text prompt (see canonicalPrompt)
+  // has no <option> of its own, so setting the id it actually holds would clear the dropdown
+  const prompt = canonicalPrompt(picked.id)!
   state.promptId = prompt.id
   state.extraTargets = []
   $<HTMLSelectElement>('prompt-select').value = String(prompt.id)
@@ -565,7 +623,7 @@ function rebuildCompareSelect(): void {
     if (m.id === state.model || m.serverOnly) continue
     const opt = document.createElement('option')
     opt.value = m.id
-    opt.textContent = `vs ${m.label ?? m.id}`
+    opt.textContent = `vs ${modelLabel(m, m.id)}`
     sel.appendChild(opt)
   }
   sel.value = state.compareId ?? ''
@@ -839,8 +897,8 @@ function kioskNext(): void {
   })
 }
 
-function nearestLiveStep(step: number): number {
-  const eng = engines.get(state.model!)
+function nearestLiveStep(step: number, id: string = state.model!): number {
+  const eng = engines.get(id)
   if (eng?.server) return step // the probe server can load any suite checkpoint
   const ls = eng?.liveSteps() ?? []
   if (!ls.length) return step
@@ -870,7 +928,9 @@ function readHash(): void {
   if (h.has('m') && catalog!.models.some((m) => m.id === h.get('m'))) state.model = h.get('m')
   if (h.has('p')) {
     const pid = Number(h.get('p'))
-    state.promptId = index!.prompts.some((p) => p.id === pid) ? pid : 0
+    // a permalink naming a duplicate-text prompt's id must resolve to the dropdown's own
+    // canonical id for it (see canonicalPrompt) — the raw id has no <option> of its own
+    state.promptId = index!.prompts.some((p) => p.id === pid) ? canonicalPrompt(pid)!.id : 0
   }
   const s = Number(h.get('s'))
   if (h.has('s') && !Number.isNaN(s)) {
@@ -896,15 +956,54 @@ function readHash(): void {
 
 /* ---------- model & prompt selection ---------- */
 
+/** The FIRST prompt in this model's list with the same text as `id`'s prompt — the one actually
+ * rendered as an <option> in the prompt-select dropdown, since rebuildPromptSelect() only renders
+ * one option per distinct text (a curated prompt occasionally repeats verbatim across language
+ * groups, e.g. "3 + 4 =" appearing in both the English and Chinese sets). Anything that sets
+ * state.promptId from outside the dropdown itself (random view, permalink restore) must route
+ * through this, or it can land on a duplicate id the dropdown never rendered an <option> for —
+ * leaving the dropdown showing no selection at all even though the grid itself is showing the
+ * right prompt (currentPrompt() looks the id up directly, unaffected by what's rendered). */
+function canonicalPrompt(id: number): Prompt | undefined {
+  const prompt = index!.prompts.find((p) => p.id === id)
+  return prompt && index!.prompts.find((p) => p.text === prompt.text)
+}
+
+function promptOption(p: Prompt): HTMLOptionElement {
+  const opt = document.createElement('option')
+  opt.value = String(p.id)
+  opt.textContent = p.text.replaceAll('\n', '⏎')
+  return opt
+}
+
 function rebuildPromptSelect(): void {
   const sel = $<HTMLSelectElement>('prompt-select')
   sel.replaceChildren()
   if (index!.prompts.length) {
-    for (const p of index!.prompts) {
-      const opt = document.createElement('option')
-      opt.value = String(p.id)
-      opt.textContent = p.text.replaceAll('\n', '⏎')
-      sel.appendChild(opt)
+    // a curated prompt occasionally reads the same in every language (e.g. "3 + 4 =" — arithmetic
+    // is arithmetic), landing in the Chinese set by curation but detected as English by promptLang;
+    // rendering only each text's canonical (first) occurrence keeps it from visibly listing twice
+    const unseen = index!.prompts.filter((p) => canonicalPrompt(p.id) === p)
+    const languages = modelInfo()?.languages
+    if (languages && languages.length > 1) {
+      // a bilingual/multilingual model's examples read as distinct language groups rather than
+      // one flat mixed list — grouped in the order prompts appear in index.json (English first,
+      // then Chinese), not a fixed language order, so a future third language falls out for free
+      const groups = new Map<'zh' | 'en', Prompt[]>()
+      for (const p of unseen) {
+        const lang = promptLang(p.text)
+        const bucket = groups.get(lang) ?? []
+        bucket.push(p)
+        groups.set(lang, bucket)
+      }
+      for (const [lang, prompts] of groups) {
+        const group = document.createElement('optgroup')
+        group.label = `${promptLangLabel(lang)} examples`
+        for (const p of prompts) group.appendChild(promptOption(p))
+        sel.appendChild(group)
+      }
+    } else {
+      for (const p of unseen) sel.appendChild(promptOption(p))
     }
     sel.disabled = false
     sel.value = String(state.promptId)
@@ -963,7 +1062,7 @@ async function switchModel(id: string): Promise<void> {
   if (!index.prompts.length) {
     // server-registered model with no precomputed shards: live-only view
     grid.setData(null, [], null)
-    status(`${modelInfo(id)?.label ?? id} is live-only — type a prompt below and hit Live probe`)
+    status(`${modelLabel(modelInfo(id), id)} is live-only — type a prompt below and hit Live probe`)
     $<HTMLInputElement>('live-input').focus()
   }
   await refreshGrid()
@@ -995,7 +1094,7 @@ function rebuildModelSelect(): void {
   for (const m of catalog!.models) {
     const opt = document.createElement('option')
     opt.value = m.id
-    opt.textContent = m.serverOnly ? `${m.label ?? m.id} (server)` : (m.label ?? m.hf)
+    opt.textContent = m.serverOnly ? `${modelLabel(m, m.id)} (server)` : modelLabel(m, m.id)
     msel.appendChild(opt)
   }
   msel.value = state.model!
@@ -1155,7 +1254,7 @@ async function boot(): Promise<void> {
     grid,
     trajSvg: state.pinned && state.mode === 'pre' ? $<SVGSVGElement>('traj-svg') : null,
     meta: {
-      model: modelInfo()?.label ?? state.model!,
+      model: modelLabel(modelInfo(), state.model!),
       prompt: state.mode === 'live' ? state.liveText : currentPrompt().text,
       step: state.mode === 'live' ? (state.liveResult?.step ?? currentStep()) : currentStep(),
       pinned: state.pinned,

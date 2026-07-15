@@ -11,6 +11,38 @@ export interface ModelEntry {
   source?: string
   serverOnly?: boolean
   steps?: number[]
+  /** Languages this model is documented to handle well, e.g. ["en"] or ["zh", "en"] — drives
+   * which curated example prompts are offered (see promptLang in ui.ts) and, for compare mode,
+   * whether a missing precomputed prompt is worth falling back to a live probe for. Omitted
+   * entirely for models with no language classification on file (custom/registered models). */
+  languages?: string[]
+  /** Overrides the auto-derived language tag (e.g. "Chinese/English" from `languages`) for
+   * models documented as supporting many more languages than just the ones we have curated
+   * examples for — BLOOM/Qwen3/Gemma-3 ship English+Chinese examples like any zh+en bilingual
+   * model, but are labeled "Multilingual" since their own model cards claim dozens+ languages. */
+  languageLabel?: string
+}
+
+/** The display tag for a model's language support, e.g. "Chinese/English" or "Multilingual" —
+ * null for English-only (and for models with no `languages` on file), matching the existing
+ * convention that English needs no tag at all. */
+export function languageTag(entry: ModelEntry): string | null {
+  if (entry.languageLabel) return entry.languageLabel
+  if (!entry.languages || entry.languages.length < 2) return null
+  const NAMES: Record<string, string> = { en: 'English', zh: 'Chinese' }
+  return entry.languages.map((l) => NAMES[l] ?? l).join('/')
+}
+
+/** Best-effort language of one prompt's text: CJK ideographs mean Chinese, anything else is
+ * treated as English. The only two languages any curated prompt currently comes in — good
+ * enough to group a bilingual/multilingual model's examples without a per-prompt data field. */
+export function promptLang(text: string): 'zh' | 'en' {
+  return /[一-鿿]/.test(text) ? 'zh' : 'en'
+}
+
+/** Display name for one detected prompt language, for a dropdown optgroup label. */
+export function promptLangLabel(lang: 'zh' | 'en'): string {
+  return lang === 'zh' ? '中文' : 'English'
 }
 
 export interface ModelCatalog {
