@@ -247,12 +247,28 @@ function gridTokens(): string[] {
   return state.mode === 'live' && state.liveResult ? state.liveResult.tokens : (currentPrompt()?.tokens ?? [])
 }
 
+/** The live-probe result to show for `step`: an exact hit in the current full-sweep cache, the
+ * sweep's nearest covered checkpoint (in-browser sweeps only cover live-capable steps, same
+ * fallback the trajectory chart already uses), or the last direct probe if it happens to match.
+ * Null means nothing is cached yet for this step — the caller must probe for it. */
+function liveResultForStep(step: number): LiveResult | null {
+  const sweep = state.liveSweep
+  if (sweep && sweep.text === state.liveText && sweep.byStep.size) {
+    const steps = [...sweep.byStep.keys()]
+    const key = sweep.byStep.has(step) ? step : nearestStep(steps, step)
+    const res = sweep.byStep.get(key)
+    if (res) return { ...res, text: state.liveText, step: key }
+  }
+  return state.liveResult?.step === step ? state.liveResult : null
+}
+
 async function refreshGrid(): Promise<void> {
   if (state.mode === 'live') {
     $('compare-wrap').hidden = true // compare is precomputed-only — hide even before the first probe lands
-    if (!state.liveResult) return
+    const res = liveResultForStep(currentStep())
+    if (!res) return
     grid.logScale = state.logColor
-    grid.setData(state.liveResult.grid, state.liveResult.tokens, state.pinned)
+    grid.setData(res.grid, res.tokens, state.pinned)
     updateRace()
     return
   }
@@ -315,7 +331,7 @@ async function updateRace(): Promise<void> {
   let top: TopEntry[] | null = null
   let goldId: number | undefined
   if (pin && state.mode === 'live') {
-    top = state.liveResult?.grid.cells[pin.layer]?.[pin.pos]?.top ?? null
+    top = liveResultForStep(currentStep())?.grid.cells[pin.layer]?.[pin.pos]?.top ?? null
   } else if (pin && index!.prompts.length) {
     const gen = viewGen
     const shard = await loadShard(state.model!, state.promptId) // promise-cached: instant after first load
@@ -332,7 +348,7 @@ async function updateRace(): Promise<void> {
   }
   cap.hidden = false
   cap.textContent = `top-10 race at the pinned cell — step ${
-    state.mode === 'live' ? (state.liveResult?.step ?? currentStep()).toLocaleString() : currentStep().toLocaleString()
+    state.mode === 'live' ? (liveResultForStep(currentStep())?.step ?? currentStep()).toLocaleString() : currentStep().toLocaleString()
   }`
   renderRace(bars, top, { goldId, limit: 10 })
 }
@@ -439,7 +455,12 @@ async function refreshTrajectory(): Promise<void> {
 }
 
 function refreshStepUI(): void {
-  const s = currentStep()
+  // in live mode with sweep data, show the checkpoint actually on screen — liveResultForStep can
+  // resolve to the sweep's nearest covered step rather than the slider's literal position (an
+  // in-browser sweep only covers live-capable checkpoints), and every other readout of "which
+  // step is this" (the race caption, the layer profile) already reports that resolved step, not
+  // the raw slider index — this must agree with them instead of naming a different checkpoint.
+  const s = state.mode === 'live' ? (liveResultForStep(currentStep())?.step ?? currentStep()) : currentStep()
   $('slider-value').textContent = s.toLocaleString()
   $('step-readout').textContent = `step ${s.toLocaleString()}`
 }
@@ -466,8 +487,17 @@ function stopPlay(): void {
   syncHash() // hash writes are skipped during playback (Safari rate-limits replaceState) — record where we stopped
 }
 
+/** Whether the time-lapse playback (▶) has anywhere to play through: precomputed checkpoints
+ * for a curated prompt, or — once "Live probe" has swept every checkpoint — cached live results.
+ * Progressive: turns true as soon as 2+ checkpoints are cached, not only once a sweep finishes. */
+function canPlay(): boolean {
+  if (state.steps.length < 2) return false
+  if (state.mode === 'pre') return true
+  return !!state.liveSweep && state.liveSweep.text === state.liveText && state.liveSweep.byStep.size >= 2
+}
+
 function startPlay(): void {
-  if (playTimer !== undefined || state.mode !== 'pre' || state.steps.length < 2) return
+  if (playTimer !== undefined || !canPlay()) return
   if (state.gridView === 'acq') setGridView('top1') // the map aggregates time; playing means watching steps
   if (state.stepIdx >= state.steps.length - 1) setStepIdx(0)
   const b = $<HTMLButtonElement>('play-btn')
@@ -492,7 +522,7 @@ function setStepIdx(idx: number): void {
 
 function refreshPlayControls(): void {
   const pre = state.mode === 'pre' && !!index?.prompts.length
-  $<HTMLButtonElement>('play-btn').disabled = state.mode !== 'pre' || state.steps.length < 2
+  $<HTMLButtonElement>('play-btn').disabled = !canPlay()
   // the map is meaningless for single-checkpoint models (every cell would read "step 0")
   $<HTMLButtonElement>('acq-toggle').hidden = !pre || state.steps.length < 2
   $<HTMLButtonElement>('log-toggle').hidden = !pre || state.gridView !== 'top1'
@@ -578,13 +608,27 @@ function setupSliderRange(): void {
 
 let liveDebounce: ReturnType<typeof setTimeout> | undefined
 function onStepChanged(): void {
-  viewGen++
   syncHash()
   if (state.mode === 'live') {
-    // debounce: re-probing on every slider notch would queue big downloads
+    // a step change always supersedes whatever the PREVIOUS step change was still waiting on —
+    // otherwise a debounce armed a moment ago (before this checkpoint was cached) can fire late,
+    // re-running a now-redundant probe that restarts the sweep and stops any playback in progress
     clearTimeout(liveDebounce)
+    if (liveResultForStep(currentStep())) {
+      // already swept this checkpoint — show it instantly, no debounce/reprobe round-trip (this
+      // is what makes both slider-scrubbing and ▶ playback smooth after a full sweep). Deliberately
+      // skip viewGen++ here: a still-running background sweep (runSweep) treats a bumped viewGen
+      // as "the user navigated away," and would cancel itself mid-sweep on every step ▶ advances
+      // through — even though we're still watching the same live prompt play out.
+      refreshGrid()
+      refreshTrajectory()
+      return
+    }
+    viewGen++
+    // not cached yet: debounce, since re-probing on every slider notch would queue big downloads
     liveDebounce = setTimeout(() => runLiveProbe(state.liveText), 350)
   } else {
+    viewGen++
     refreshGrid()
     refreshTrajectory()
   }
@@ -593,6 +637,11 @@ function onStepChanged(): void {
 /* ---------- live probing ---------- */
 
 let probeSeq = 0 // only the latest probe run controls the button / error status
+/** Probe `text` at the current checkpoint, then — so the ▶ playback and step slider work exactly
+ * like a curated prompt's — continue on into runSweep() to probe every other checkpoint too.
+ * The first checkpoint renders as soon as it lands; the rest stream in afterward (status line
+ * reports progress), which is why "Live probe" keeps showing busy for the whole sweep, not just
+ * the initial forward pass. */
 async function runLiveProbe(text: string): Promise<void> {
   if (!text.trim()) return
   stopPlay()
@@ -634,6 +683,7 @@ async function runLiveProbe(text: string): Promise<void> {
     refreshGrid()
     refreshTrajectory()
     syncHash()
+    await runSweep() // fill in every other checkpoint so play/scrub need no further probing
   } catch (e) {
     // a stale probe's late failure must not clobber the status of the view the user is on now
     if (gen === viewGen) status(`live probe failed: ${(e as Error).message}`)
@@ -685,6 +735,8 @@ async function runSweep(): Promise<void> {
       if (gen !== viewGen || run !== sweepSeq) return
       state.liveSweep.byStep.set(steps[i], res)
       refreshTrajectory()
+      refreshPlayControls() // ▶ becomes usable as soon as 2+ checkpoints are cached, not only at the end
+      if (currentStep() === steps[i]) refreshGrid() // the step already on screen just finished — repaint it
     }
     status(`traced ${steps.length} checkpoints — scrub the slider to replay any of them instantly`)
   } catch (e) {

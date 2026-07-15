@@ -369,6 +369,10 @@ export class LiveEngine {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: this.modelId, step, text, ...(targets?.length ? { targets } : {}) }),
+      // a full sweep now calls this once per checkpoint (see runSweep in main.ts) instead of once
+      // per click — an unresponsive server used to strand a single probe; it would now strand
+      // the whole sweep, disabling the "Live probe" button with no way back short of a reload.
+      signal: AbortSignal.timeout(60000),
     })
     if (!res.ok) throw new Error(`probe server: ${res.status} ${(await res.text()).slice(0, 120)}`)
     const r = await res.json()
