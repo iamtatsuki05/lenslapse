@@ -3,10 +3,10 @@
 **A fully in-browser time-lapse for the logit lens: scrub across Pythia's public training checkpoints and watch next-token predictions crystallize from noise into knowledge — layer by layer, with zero backend.**
 
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
-- **Eleven shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, GPT-2 124M (final checkpoint), three multilingual suites unchanged by the same recipe (MAP-Neo-250M and BAAI Aquila-135M — Chinese/English, Hub-subfolder checkpoints — and BLOOM-560M — 46 languages, `global_step{N}` revisions), and four more architecture-coverage examples (SmolLM2-135M, Qwen3-0.6B, OPT-125M, Gemma-3-270M) — switchable in the header. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, Mistral-style RMSNorm, and Gemma-style plus-one-weight RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`). `opt-125m` and `gemma3-270m` carry non-Apache-2.0/MIT licenses — see `docs/model-card.md` before redistributing or deploying them.
+- **Eleven shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, GPT-2 124M (final checkpoint), three multilingual suites unchanged by the same recipe (MAP-Neo-250M and BAAI Aquila-135M — Chinese/English, Hub-subfolder checkpoints — and BLOOM-560M — 46 languages, `global_step{N}` revisions), and four more architecture-coverage examples (SmolLM2-135M, Qwen3-0.6B, OPT-125M, Gemma-3-270M — the latter two also ship the same Chinese/English curated prompts, per their own documented multilingual support) — switchable in the header, each labeled by its documented language support ("Multilingual", "Chinese/English", or untagged for English-only) and offering only the curated prompts it can actually handle. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, Mistral-style RMSNorm, and Gemma-style plus-one-weight RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`); a layout the generic heuristic can't reach registers an explicit override in one line via `register_architecture()` (`lenslapse/arch.py`), without touching the resolver itself. `opt-125m` and `gemma3-270m` carry non-Apache-2.0/MIT licenses — see `docs/model-card.md` before redistributing or deploying them.
 - **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3× pixel density) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
-- Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
+- Free-text prompts run **live**, in your browser or on a connected probe server: one click probes every checkpoint automatically (not just the current one), so the same ▶ playback that animates curated prompts works for anything you type, and comparing two models falls back to a live probe when one of them has no precomputed match for the prompt — your prompt never leaves your device unless a probe server is connected.
 
 ## Quick start: probe your own models (no checkout needed)
 
@@ -98,7 +98,12 @@ uv run lenslapse add-model --model bigscience/bloom-560m-intermediate --id bloom
 One command exports the ONNX pairs (parity-checked), precomputes the lens shards, installs the
 tokenizer, and registers the model in `models.json` — adding a model is a data change, not a code
 change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style RMSNorm / Mistral-style
-RMSNorm verified).
+RMSNorm / Gemma-style plus-one-weight RMSNorm verified). A layout the generic heuristic can't reach
+(e.g. a decoder nested more attribute hops deep than usual, like OPT's) doesn't need a code change
+either — `register_architecture(model_type, base_path, ...)` in `lenslapse/arch.py` registers an
+explicit override for that model's own `config.model_type`, which then replaces the generic guess
+entirely for that architecture rather than blending with it, so a wrong override fails loudly
+instead of silently shipping a wrong lens.
 
 ## Heavy models: the local probe server
 

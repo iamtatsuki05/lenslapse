@@ -146,8 +146,9 @@ tokenizer files fail to load under current `transformers` (a `transformers`-side
 BLOOM error — its tokenizer is loaded from the final `bigscience/bloom-560m` repo instead, identical
 across checkpoints of the same run); see `lenslapse/sources.py`'s `resolve_subfolder_sources` /
 `--subfolder-map`, `--revision-template`, `--tokenizer-ref`, and `lenslapse/prompts_zh_en.json` (the
-combined English + Chinese curated-prompt set used for these three multilingual models, in place of
-the English-only default) for the exact commands.
+combined English + Chinese curated-prompt set used for MAP-Neo, Aquila, and BLOOM as well as the
+architecture-coverage examples Qwen3 and Gemma 3 — five multilingual-capable models in total, in
+place of the English-only default used by the other six) for the exact commands.
 
 ## License and attribution
 

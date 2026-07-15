@@ -76,9 +76,10 @@
             <span class="card-icon" aria-hidden="true">🌐</span>
             <h3>Fully in-browser, zero backend</h3>
             <p>
-              Free-text prompts run as a single forward pass via onnxruntime-web (WebGPU, with WASM fallback). A
-              static site plus versioned weights on the HF Hub means unlimited concurrent users at zero hosting cost
-              — the demo cannot rot.
+              Free-text prompts run via onnxruntime-web (WebGPU, with WASM fallback) or an optional local probe
+              server — one click now probes every checkpoint automatically, so ▶ playback works for anything you
+              type, just like the curated prompts. A static site plus versioned weights on the HF Hub means
+              unlimited concurrent users at zero hosting cost — the demo cannot rot.
             </p>
           </div>
           <div class="card">
@@ -87,9 +88,11 @@
             <p>
               <code>pip install</code> then <code>lenslapse server</code> serves the app and the probe API on one
               local port. Point it at any HF model or a local Trainer run — no ONNX conversion, no config files. The
-              recipe is architecture-generic: GPT-NeoX, GPT-2, Llama-style, Mistral-style, and Gemma-style
-              (plus-one-weight) RMSNorm models all pass the parity check — shipped for MAP-Neo, Aquila, BLOOM,
-              SmolLM2, Qwen3, OPT, and Gemma 3 alongside Pythia and GPT-2.
+              recipe is architecture-generic: GPT-NeoX and GPT-2-style LayerNorm models, plus Llama-style,
+              Mistral-style, and Gemma-style (plus-one-weight) RMSNorm models, all pass the parity check —
+              shipped for MAP-Neo, Aquila, BLOOM, SmolLM2, Qwen3, OPT, and Gemma 3 alongside Pythia and GPT-2.
+              A layout the generic heuristic can't reach registers an explicit override in one line, with no
+              change to the resolver itself.
             </p>
           </div>
           <div class="card">
@@ -108,7 +111,8 @@
               One click plays the whole time-lapse, cells flashing as their top-1 changes. A top-10 bar race and the
               classic p-vs-layer profile animate at the pinned cell; an acquisition map shows when each cell first
               learned its final answer, a diff view shows what changed since any reference checkpoint, and a compare
-              mode renders a second model in lockstep.
+              mode renders a second model in lockstep — falling back to a live probe of its own when the compared
+              model has no precomputed match for the prompt.
             </p>
           </div>
           <div class="card">
@@ -166,9 +170,10 @@
           Each checkpoint is exported once into a pair of ONNX graphs: a <strong>backbone</strong> that returns the
           pre-layer-norm residual stream after the embedding and every block, and a small <strong>lens head</strong>
           (final layer norm + unembedding) applicable to any layer's hidden state. Curated prompts are precomputed
-          with fp32 PyTorch into static JSON shards; a live prompt is tokenized in the browser and probed with one
-          forward pass, pushing every (layer, position) hidden state through the lens head in a single batched
-          matmul. Weights are stored fp16 and cast to fp32 at session load.
+          with fp32 PyTorch into static JSON shards; a live prompt is tokenized once and then probed against every
+          checkpoint in turn — one forward pass each, pushing every (layer, position) hidden state through the lens
+          head in a single batched matmul — so the same time-lapse playback works for it too. Weights are stored
+          fp16 and cast to fp32 at session load.
         </p>
         <pre>
 Pythia checkpoint (HF Hub, revision step{N})

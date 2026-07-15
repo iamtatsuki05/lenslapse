@@ -49,9 +49,10 @@ that the live-probe path and the free-text tokenizer feature need locally.
 
 - [ ] Page loads and the lens grid renders for the default prompt (precomputed, no download).
 - [ ] Slider scrubbing updates the grid; ticks show live-capable diamonds.
-- [ ] The model picker switches between the shipped models — Pythia 14M / 70M / 160M, GPT-2, and
-      the multilingual MAP-Neo-250M / Aquila-135M / BLOOM-560M suites (steps and grid depth change;
-      the three multilingual suites are precomputed-only, no live-probe diamonds).
+- [ ] The model picker switches between all eleven shipped models — Pythia 14M / 70M / 160M, GPT-2,
+      the multilingual MAP-Neo-250M / Aquila-135M / BLOOM-560M suites, and the four architecture-
+      coverage examples SmolLM2-135M / Qwen3-0.6B / OPT-125M / Gemma-3-270M (steps and grid depth
+      change per model; every model shows live-capable diamonds for every one of its checkpoints).
 - [ ] Clicking a cell pins it and draws trajectories; the permalink button reproduces the exact view
       (including the selected model).
 - [ ] Live probe on a free-text prompt downloads one checkpoint (~29MB for 14M, ~142MB for 70M,
