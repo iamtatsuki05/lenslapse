@@ -11,6 +11,8 @@ Subcommands delegate to the underlying modules, so every flag they document work
 
 import sys
 
+from lenslapse.logging_utils import configure_cli_logging
+
 USAGE = """\
 usage: lenslapse <command> [options]
 
@@ -24,6 +26,10 @@ commands:
 
 
 def main() -> None:
+    # the single true entry point for the installed `lenslapse` command (pyproject.toml's
+    # [project.scripts] calls this directly, bypassing every other file's __main__ guard below
+    # it), so logging must be configured here rather than relying on any of them.
+    configure_cli_logging()
     argv = sys.argv[1:]
     if argv and argv[0] in ("-h", "--help"):
         print(USAGE, end="")
@@ -33,25 +39,28 @@ def main() -> None:
         raise SystemExit(2)
     command, rest = argv[0], argv[1:]
     if command == "server":
-        from .server import main as server_main
+        import fire
+
+        from lenslapse.server import main as server_main
 
         # the CLI is the friendly path: open the app unless explicitly declined
         if "--no-open" in rest:
             rest = [a for a in rest if a != "--no-open"]
         elif "--open" not in rest:
             rest = [*rest, "--open"]
-        sys.argv = ["lenslapse server", *rest]
-        server_main()
+        fire.Fire(server_main, command=rest)
     elif command in ("probe", "trace", "models"):
-        from .client import main as client_main
+        import fire
 
-        sys.argv = ["lenslapse", command, *rest]
-        client_main()
+        from lenslapse.client import COMMANDS
+
+        fire.Fire(COMMANDS[command], command=rest)
     elif command == "add-model":
-        from .add_model import main as add_model_main
+        import fire
 
-        sys.argv = ["lenslapse add-model", *rest]
-        add_model_main()
+        from lenslapse.add_model import main as add_model_main
+
+        fire.Fire(add_model_main, command=rest)
     else:
         print(f"unknown command {command!r}\n{USAGE}", end="", file=sys.stderr)
         raise SystemExit(2)

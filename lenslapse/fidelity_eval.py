@@ -12,22 +12,28 @@ final-layer-only top-1 agreement, and mean KL(fp32 || onnx) at the final layer.
 Writes a JSON report for the paper's fidelity table.
 """
 
-import argparse
 import json
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
+import fire
 import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
 from onnx import TensorProto, helper, numpy_helper
 from onnxruntime.quantization import QuantType, quantize_dynamic
+from pydantic import BaseModel, field_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .export_checkpoints import Backbone, build_lens_onnx
-from .precompute_lens import PROMPTS, lens_all
+from lenslapse.export_checkpoints import Backbone, build_lens_onnx
+from lenslapse.logging_utils import configure_cli_logging
+from lenslapse.precompute_lens import PROMPTS, lens_all
+from lenslapse.sources import coerce_fire_csv_arg
+
+logger = logging.getLogger(__name__)
 
 
 def build_lens_onnx_f16(model: Any, path: Path) -> None:
@@ -36,7 +42,7 @@ def build_lens_onnx_f16(model: Any, path: Path) -> None:
     LayerNorm-only variant used for the quantization comparison (Pythia); the shipped f16w format
     (onnx_f16.save_f16 over build_lens_onnx) covers RMSNorm architectures as well.
     """
-    from .arch import resolve
+    from lenslapse.arch import resolve
 
     handles = resolve(model)
     h = model.config.hidden_size
@@ -100,7 +106,7 @@ def make_variants(model: Any, bb_path: Path, lens_path: Path, td: Path) -> dict[
     variants["q8pc+f16lens"] = (q8pc_bb, f16_lens)
     variants["q8pt+f16lens"] = (q8pt_bb, f16_lens)
 
-    from .onnx_f16 import save_f16
+    from lenslapse.onnx_f16 import save_f16
 
     f16w_bb, f16w_lens = Path(td) / "bb.f16w.onnx", Path(td) / "lens.f16w.onnx"
     save_f16(str(bb_path), str(f16w_bb))
@@ -136,34 +142,54 @@ def eval_variant(bb_path: Path, lens_path: Path, prompts_enc: Any, ref: Any) -> 
     }
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="EleutherAI/pythia-70m")
-    ap.add_argument("--steps", default="8000,64000,143000")
-    ap.add_argument("--out", required=True)
-    args = ap.parse_args()
+class FidelityEvalConfig(BaseModel):
+    """Validated arguments for `fidelity_eval`; see `main`'s docstring for what each means."""
 
-    tok = AutoTokenizer.from_pretrained(args.model)
+    model: str = "EleutherAI/pythia-70m"
+    steps: str = "8000,64000,143000"
+    out: Path
+
+    _coerce_steps = field_validator("steps", mode="before")(coerce_fire_csv_arg)
+
+
+def main(out: str, model: str = "EleutherAI/pythia-70m", steps: str = "8000,64000,143000") -> None:
+    """Evaluate ONNX weight-format fidelity against fp32 torch ground truth on the curated prompts.
+
+    Args:
+        out: output path for the JSON fidelity report.
+        model: HF id or local directory.
+        steps: comma-separated training steps to evaluate.
+    """
+    cfg = FidelityEvalConfig(
+        out=out,  # type: ignore[arg-type]  # pydantic coerces str -> Path
+        model=model,
+        steps=steps,
+    )
+
+    tok = AutoTokenizer.from_pretrained(cfg.model)
     prompts_enc = {i: np.array([tok(p["text"])["input_ids"]], dtype=np.int64) for i, p in enumerate(PROMPTS)}
 
-    report = {"model": args.model, "prompts": len(PROMPTS), "steps": {}}
-    for step in [int(s) for s in args.steps.split(",")]:
-        model = AutoModelForCausalLM.from_pretrained(args.model, revision=f"step{step}", dtype=torch.float32)
-        model.eval()
+    report: dict[str, Any] = {"model": cfg.model, "prompts": len(PROMPTS), "steps": {}}
+    for step in [int(s) for s in cfg.steps.split(",")]:
+        step_model = AutoModelForCausalLM.from_pretrained(cfg.model, revision=f"step{step}", dtype=torch.float32)
+        step_model.eval()
         ref = {}
         for i, p in enumerate(PROMPTS):
-            ref[i] = lens_all(model, torch.tensor([tok(p["text"])["input_ids"]])).numpy()
+            ref[i] = lens_all(step_model, torch.tensor([tok(p["text"])["input_ids"]])).numpy()
 
         with tempfile.TemporaryDirectory() as td:
-            bb_path, lens_path = export_fp32(model, Path(td))
-            variants = {"fp32": (bb_path, lens_path), **make_variants(model, bb_path, lens_path, Path(td))}
+            bb_path, lens_path = export_fp32(step_model, Path(td))
+            variants = {"fp32": (bb_path, lens_path), **make_variants(step_model, bb_path, lens_path, Path(td))}
             report["steps"][step] = {name: eval_variant(b, le, prompts_enc, ref) for name, (b, le) in variants.items()}
-        del model
-        print(f"[step{step}]", json.dumps(report["steps"][step], indent=1), flush=True)
+        del step_model
+        # per-step result data, not a diagnostic message: keep on print() like ALL_DONE below,
+        # so piping stdout to a file captures the actual report instead of just progress noise.
+        print(f"[step{step}] {json.dumps(report['steps'][step], indent=1)}")
 
-    Path(args.out).write_text(json.dumps(report, indent=1))
-    print("ALL_DONE", flush=True)
+    cfg.out.write_text(json.dumps(report, indent=1))
+    print("ALL_DONE")
 
 
 if __name__ == "__main__":
-    main()
+    configure_cli_logging()
+    fire.Fire(main)

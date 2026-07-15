@@ -27,6 +27,7 @@ dependencies = [
     "uvicorn>=0.30",
     "pydantic>=2.0",
     "tiktoken>=0.13.0",
+    "fire>=0.7.1",
 ]
 
 [project.scripts]
@@ -75,7 +76,7 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["torch.*", "transformers.*", "onnx.*", "onnxruntime.*", "huggingface_hub.*", "uvicorn.*", "numpy.*"]
+module = ["torch.*", "transformers.*", "onnx.*", "onnxruntime.*", "huggingface_hub.*", "uvicorn.*", "numpy.*", "fire.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 

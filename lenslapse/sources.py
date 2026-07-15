@@ -14,14 +14,15 @@ Four source shapes are supported:
 """
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
+from pydantic.dataclasses import dataclass
 
 if TYPE_CHECKING:
     from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 
-# Shared across server.py (registry/argparse) and client.py (argparse) — defined here, not in
+# Shared across server.py (registry/fire CLI) and client.py (fire CLI) — defined here, not in
 # server.py, because this module has no torch/fastapi import: client.py's HTTP-only path must
 # stay able to import these without paying for the heavy deps server.py pulls in.
 Mode = Literal["suite", "final", "local"]
@@ -31,8 +32,29 @@ DType = Literal["float32", "float16", "bfloat16", "auto"]
 DTYPE_CHOICES: tuple[DType, ...] = ("float32", "float16", "bfloat16", "auto")
 
 
+def coerce_fire_csv_arg(v: object) -> object:
+    """fire always tries to parse a bare CLI value as a Python literal before falling back to
+    str, so an unquoted comma-separated list of numbers (e.g. `--steps 0,512,8000`) arrives as
+    the tuple (0, 512, 8000) instead of a string, and a single bare number (e.g. `--steps 8000`)
+    arrives as a plain int — for every CLI parameter in this package that expects a
+    comma-separated string of ids/steps (`steps`, `targets`). Use as a pydantic
+    `field_validator(mode="before")` to normalize back to the comma-joined string the rest of the
+    pipeline expects; a value already shaped as a str (the default, or a programmatic caller)
+    passes through unchanged."""
+    if isinstance(v, (tuple, list)):
+        return ",".join(str(x) for x in v)
+    if isinstance(v, int):
+        return str(v)
+    return v
+
+
 @dataclass
 class CheckpointSource:
+    """A pydantic dataclass (not BaseModel): callers throughout this package construct it
+    positionally (CheckpointSource(model, revision, step)), which BaseModel's keyword-only
+    __init__ does not support — the dataclass shape keeps that calling convention while still
+    validating field types."""
+
     load_ref: str  # HF id or local path passed to from_pretrained
     revision: str | None  # HF revision, None for local paths and subfolder sources
     step: int  # slider position in the app
@@ -96,6 +118,33 @@ def resolve_tokenizer_ref(tokenizer_ref: str | None, fallback: CheckpointSource)
         return fallback.load_ref, fallback.revision, fallback.subfolder or ""
     ref, _, rev = tokenizer_ref.partition("@")
     return ref, (rev or None), ""
+
+
+def load_tokenizer(
+    load_ref: str, revision: str | None, subfolder: str, *, trust_remote_code: bool = True
+) -> "PreTrainedTokenizerBase":
+    """AutoTokenizer.from_pretrained, with a fallback for a confirmed transformers limitation
+    (checked against transformers 4.57.6): a repo whose tokenizer needs custom code
+    (trust_remote_code=True, e.g. Qwen-family tokenizers) does not pass `subfolder` through to
+    that code file's own download — only the tokenizer_config.json/vocab file resolution honors
+    it — so a subfolder-nested custom tokenizer 404s on the code file even though the exact same
+    weights load fine via AutoModelForCausalLM.from_pretrained(subfolder=...). This is generic
+    (not specific to one model): any future subfolder-suite architecture with a custom-code
+    tokenizer can hit it. When it does, download just that subfolder's files locally (not the
+    whole repo) and retry from there, where `subfolder` is no longer needed."""
+    from transformers import AutoTokenizer
+
+    try:
+        return AutoTokenizer.from_pretrained(
+            load_ref, revision=revision, subfolder=subfolder, trust_remote_code=trust_remote_code
+        )
+    except OSError:
+        if not subfolder:
+            raise
+        from huggingface_hub import snapshot_download
+
+        local_dir = snapshot_download(load_ref, revision=revision, allow_patterns=[f"{subfolder}/*"])
+        return AutoTokenizer.from_pretrained(str(Path(local_dir) / subfolder), trust_remote_code=trust_remote_code)
 
 
 _WORD_START_MARKERS = ("Ġ", "▁")  # GPT-2-style byte-level BPE and SentencePiece, respectively

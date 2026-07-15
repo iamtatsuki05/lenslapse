@@ -17,28 +17,35 @@ Design notes (validated 2026-07-13, see experiments/feasibility-note.md):
   checkpoints, while fp16 weight storage keeps 100.0% agreement at half the fp32 size.
 """
 
-import argparse
 import json
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
+import fire
 import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
 from onnx import TensorProto, helper, numpy_helper
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from pydantic import BaseModel, field_validator
+from transformers import AutoModelForCausalLM
 
-from .arch import resolve
-from .onnx_f16 import save_f16
-from .sources import (
+from lenslapse.arch import resolve
+from lenslapse.logging_utils import configure_cli_logging
+from lenslapse.onnx_f16 import save_f16
+from lenslapse.sources import (
     CheckpointSource,
+    coerce_fire_csv_arg,
+    load_tokenizer,
     resolve_sources,
     resolve_subfolder_sources,
     resolve_tokenizer_ref,
     token_display_text,
 )
+
+logger = logging.getLogger(__name__)
 
 PROBE = "The capital of Japan is the city of"
 
@@ -215,107 +222,133 @@ def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str,
         "backbone_bytes": bb_f16.stat().st_size,
         "lens_bytes": lens_f16.stat().st_size,
     }
-    print(
-        f"[{rev}] fp32_diff={fp32_diff:.2e} f16_diff={f16_diff:.2e} top1_match={top1_match} "
-        f"(top1={info['top1_token']!r}) "
-        f"bb={info['backbone_bytes'] / 1e6:.1f}MB lens={info['lens_bytes'] / 1e6:.1f}MB",
-        flush=True,
+    logger.info(
+        "[%s] fp32_diff=%.2e f16_diff=%.2e top1_match=%s (top1=%r) bb=%.1fMB lens=%.1fMB",
+        rev,
+        fp32_diff,
+        f16_diff,
+        top1_match,
+        info["top1_token"],
+        info["backbone_bytes"] / 1e6,
+        info["lens_bytes"] / 1e6,
     )
     del model
     return info
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="EleutherAI/pythia-70m")
-    ap.add_argument(
-        "--steps", default="0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
-    )
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--skip-existing", action="store_true")
-    ap.add_argument(
-        "--final-only", action="store_true", help="single checkpoint (revision main) instead of a step suite"
-    )
-    ap.add_argument(
-        "--subfolder-map",
-        default=None,
-        help='hub-subfolder suite: "step:path,step:path,..." for repos that nest checkpoints as '
-        "subfolders of one revision instead of using git revisions per checkpoint; overrides --steps",
-    )
-    ap.add_argument(
-        "--revision-template",
-        default="step{}",
-        help='revision naming for hub suites, e.g. "global_step{}" for bigscience/bloom-*-intermediate',
-    )
-    ap.add_argument(
-        "--tokenizer-ref",
-        default=None,
-        help='load the tokenizer from a different ref than the checkpoint weights, as "repo_id" or '
-        '"repo_id@revision" — for repos where the per-checkpoint tokenizer files do not load cleanly '
-        "(bigscience/bloom-*-intermediate) or live in a separate repo entirely (m-a-p/neo_scalinglaw_*, "
-        "whose tokenizer is only published under m-a-p/neo_7b). The tokenizer is identical across "
-        "checkpoints of the same pretraining run, so this is always safe when it applies.",
-    )
-    args = ap.parse_args()
+class ExportConfig(BaseModel):
+    """Validated arguments for `export_checkpoints`; see `main`'s docstring for what each means."""
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    model: str = "EleutherAI/pythia-70m"
+    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
+    out: Path
+    skip_existing: bool = False
+    final_only: bool = False
+    subfolder_map: str | None = None
+    revision_template: str = "step{}"
+    tokenizer_ref: str | None = None
+
+    _coerce_steps = field_validator("steps", mode="before")(coerce_fire_csv_arg)
+
+
+def main(
+    out: str,
+    model: str = "EleutherAI/pythia-70m",
+    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000",
+    skip_existing: bool = False,
+    final_only: bool = False,
+    subfolder_map: str | None = None,
+    revision_template: str = "step{}",
+    tokenizer_ref: str | None = None,
+) -> None:
+    """Export a model's training checkpoints as browser-runnable ONNX pairs.
+
+    Args:
+        out: output directory for the ONNX pairs and `manifest.json`.
+        model: HF id or local directory.
+        steps: comma-separated training steps for a hub suite (ignored if `subfolder_map` is set).
+        skip_existing: skip steps whose ONNX files already exist in `out`.
+        final_only: single checkpoint (revision "main") instead of a step suite.
+        subfolder_map: "step:path,step:path,..." for repos that nest checkpoints as subfolders of
+            one revision instead of using git revisions per checkpoint; overrides `steps`.
+        revision_template: revision naming for hub suites, e.g. "global_step{}" for
+            bigscience/bloom-*-intermediate.
+        tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights, as
+            "repo_id" or "repo_id@revision" — for repos where the per-checkpoint tokenizer files
+            do not load cleanly (bigscience/bloom-*-intermediate) or live in a separate repo
+            entirely (m-a-p/neo_scalinglaw_*, whose tokenizer is only published under
+            m-a-p/neo_7b). The tokenizer is identical across checkpoints of the same pretraining
+            run, so this is always safe when it applies.
+    """
+    cfg = ExportConfig(
+        model=model,
+        steps=steps,
+        out=out,  # type: ignore[arg-type]  # pydantic coerces str -> Path
+        skip_existing=skip_existing,
+        final_only=final_only,
+        subfolder_map=subfolder_map,
+        revision_template=revision_template,
+        tokenizer_ref=tokenizer_ref,
+    )
+
+    cfg.out.mkdir(parents=True, exist_ok=True)
     sources = (
-        resolve_subfolder_sources(args.model, args.subfolder_map)
-        if args.subfolder_map
-        else resolve_sources(args.model, args.steps, args.final_only, args.revision_template)
+        resolve_subfolder_sources(cfg.model, cfg.subfolder_map)
+        if cfg.subfolder_map
+        else resolve_sources(cfg.model, cfg.steps, cfg.final_only, cfg.revision_template)
     )
-    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(args.tokenizer_ref, sources[0])
-    tok = AutoTokenizer.from_pretrained(
-        tok_load_ref, revision=tok_rev, subfolder=tok_subfolder, trust_remote_code=True
-    )
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(cfg.tokenizer_ref, sources[0])
+    tok = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
 
     cfg_model = AutoModelForCausalLM.from_pretrained(
         sources[0].load_ref, revision=sources[0].revision, subfolder=sources[0].subfolder or "", dtype=torch.float32
     )
     meta = {
-        "model": args.model,
+        "model": cfg.model,
         "format": "f16",
         "files": ["backbone.f16.onnx", "lens.f16.onnx"],
         "hidden_size": cfg_model.config.hidden_size,
         "num_layers": cfg_model.config.num_hidden_layers,
         "vocab_size": cfg_model.config.vocab_size,
-        "tokenizer": args.model,
+        "tokenizer": cfg.model,
         "probe": PROBE,
         "steps": [],
     }
     del cfg_model
 
     # merge with a previous run's manifest so incremental exports never drop existing checkpoints
-    manifest_path = out_dir / "manifest.json"
+    manifest_path = cfg.out / "manifest.json"
     results: dict[int, dict] = {}
     if manifest_path.exists():
         try:
             old = json.loads(manifest_path.read_text())
-            if old.get("model") == args.model:
+            if old.get("model") == cfg.model:
                 results = {s["step"]: s for s in old.get("steps", [])}
             else:
                 raise SystemExit(
-                    f"{out_dir} already holds a manifest for {old.get('model')!r}; refusing to mix models"
+                    f"{cfg.out} already holds a manifest for {old.get('model')!r}; refusing to mix models"
                 )
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise SystemExit(f"{manifest_path} is unreadable ({e}); fix or delete it before re-exporting") from e
 
     for src in sources:
         step = src.step
-        step_dir = out_dir / src.name
+        step_dir = cfg.out / src.name
         complete = all((step_dir / f).exists() for f in meta["files"])
-        if args.skip_existing and complete and step in results:
-            print(f"[{src.name}] exists, skipping", flush=True)
+        if cfg.skip_existing and complete and step in results:
+            logger.info("[%s] exists, skipping", src.name)
             continue
-        results[step] = export_source(src, out_dir, tok)
+        results[step] = export_source(src, cfg.out, tok)
         meta["steps"] = [results[k] for k in sorted(results)]
         manifest_path.write_text(json.dumps(meta, indent=1))
 
     meta["steps"] = [results[k] for k in sorted(results)]
     manifest_path.write_text(json.dumps(meta, indent=1))
-    print("ALL_DONE steps:", len(meta["steps"]), flush=True)
+    # the completion signal, not a diagnostic message: scripts pipe stdout and grep for this,
+    # so it must stay on print() rather than move to the logger (which defaults to stderr).
+    print(f"ALL_DONE steps: {len(meta['steps'])}")
 
 
 if __name__ == "__main__":
-    main()
+    configure_cli_logging()
+    fire.Fire(main)

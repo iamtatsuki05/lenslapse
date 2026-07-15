@@ -17,8 +17,10 @@ Usage:
   uv run lenslapse server           (repo checkout; serves the fresh web/dist build)
 
 The registry defaults to the app's models.json (hub suites with step{N} revisions); extend it
-with --extra for local runs or heavy hub models, e.g.:
-  --extra my-run=/path/to/trainer_output --extra llama=meta-llama/Llama-3.2-1B:final
+with --extra for local runs or heavy hub models — a comma-separated list of specs (fire has no
+repeated-flag/append mechanism, so unlike the old argparse CLI this is one flag, not one per
+model), e.g.:
+  --extra "my-run=/path/to/trainer_output,llama=meta-llama/Llama-3.2-1B:final"
 
 Models can also be registered at runtime from the web app's "models" dialog (GET/POST/DELETE
 /models); user-registered entries persist to --registry-file and survive restarts. This is a
@@ -26,9 +28,9 @@ management API for a localhost tool: anyone who can reach the server can registe
 or any directory readable by the server process, so do not expose the port beyond your machine.
 """
 
-import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -39,8 +41,9 @@ import webbrowser
 from collections import OrderedDict, deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, TypedDict
 
+import fire
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -48,10 +51,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import model_info
 from pydantic import BaseModel, ValidationError
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
-from .precompute_lens import lens_all
-from .sources import DTYPE_CHOICES, MODE_CHOICES, CheckpointSource, DType, Mode, resolve_sources, token_display_text
+from lenslapse.logging_utils import configure_cli_logging
+from lenslapse.precompute_lens import lens_all
+from lenslapse.sources import (
+    MODE_CHOICES,
+    CheckpointSource,
+    DType,
+    Mode,
+    load_tokenizer,
+    resolve_sources,
+    resolve_subfolder_sources,
+    resolve_tokenizer_ref,
+    token_display_text,
+)
+
+logger = logging.getLogger(__name__)
 
 TOPK = 10
 MAX_TOKENS = 64
@@ -112,22 +128,27 @@ class ServerState(TypedDict, total=False):
 STATE: ServerState = {"registry": {}, "max_loaded": 1, "device_map": False, "dtype": "float32"}
 
 
-# JSON response shapes for the flat endpoints (mypy-checked, zero runtime effect: FastAPI
-# serializes the plain dict returned at runtime regardless of the annotation). /probe's response
-# is deliberately excluded — it is assembled from tensor data through several layers of nested
-# comprehensions, and forcing that shape into a TypedDict would trade a large, risky rewrite for
-# marginal benefit; dict[str, Any] stays accurate there.
-class HealthResponse(TypedDict):
+# JSON response shapes for the flat endpoints. FastAPI uses the return-type annotation below as
+# an implicit response_model (verified empirically, not just for docs): a BaseModel field with a
+# `= None` default that a route handler leaves unset is filled in and serialized as `"field":
+# null`, unlike a TypedDict's NotRequired, which FastAPI omits entirely when absent from the
+# returned dict. RegisterResponse.label and ConvertStatusResponse.log/note rely on the
+# "omitted, not null" shape (matching what the handlers below have always returned), so their
+# routes additionally set response_model_exclude_none=True to restore it. /probe's response is
+# deliberately excluded from this pattern — it is assembled from tensor data through several
+# layers of nested comprehensions, and forcing that shape into a model would trade a large, risky
+# rewrite for marginal benefit; dict[str, Any] stays accurate there.
+class HealthResponse(BaseModel):
     ok: bool
     models: list[str]
     device: str
 
 
-class PickFolderResponse(TypedDict):
+class PickFolderResponse(BaseModel):
     path: str
 
 
-class ModelListEntry(TypedDict):
+class ModelListEntry(BaseModel):
     id: str
     ref: str
     mode: Mode
@@ -136,32 +157,32 @@ class ModelListEntry(TypedDict):
     origin: Literal["catalog", "user"]
 
 
-class RegisterResponse(TypedDict):
+class RegisterResponse(BaseModel):
     id: str
     ref: str
     mode: Mode
-    label: NotRequired[str]  # entry.model_dump(exclude_none=True) drops it when unset
+    label: str | None = None  # omitted from the JSON when unset; see response_model_exclude_none
     steps: list[int]  # always present: overwritten unconditionally by model_steps(entry)
 
 
-class RemoveResponse(TypedDict):
+class RemoveResponse(BaseModel):
     removed: str
 
 
-class ConvertStatusResponse(TypedDict):
+class ConvertStatusResponse(BaseModel):
     id: str
     status: str
-    log: NotRequired[list[str]]
-    note: NotRequired[str]
+    log: list[str] | None = None
+    note: str | None = None
 
 
-class TokenizeResponse(TypedDict):
+class TokenizeResponse(BaseModel):
     ids: list[int]
     tokens: list[str]
 
 
-LOADED: OrderedDict = OrderedDict()  # (ref, revision) -> (model, tokenizer)
-TOKENIZERS: OrderedDict = OrderedDict()  # (ref, revision) -> tokenizer only (cheap; for /tokenize)
+LOADED: OrderedDict = OrderedDict()  # (ref, revision, subfolder) -> (model, tokenizer)
+TOKENIZERS: OrderedDict = OrderedDict()  # (tok_ref, tok_revision, tok_subfolder) -> tokenizer (cheap; for /tokenize)
 # FastAPI runs sync endpoints in a threadpool; lens_all installs forward hooks on the shared
 # model, so concurrent probes would capture each other's layer outputs (and persist the garbage
 # to the cache). One global lock serializes load+forward+write — fine for a batch-1 local server.
@@ -202,6 +223,17 @@ class RegistryEntry(BaseModel):
     label: str | None = None
     steps: list[int] | None = None  # suite only
     origin: Literal["catalog", "user"] = "user"
+    # suite only, catalog-sourced (models.json) — mirrors export_checkpoints.py's /
+    # precompute_lens.py's --revision-template / --subfolder-map for hub suites whose revisions
+    # don't follow the step{N} default (e.g. BLOOM's global_step{N}), or that nest checkpoints as
+    # subfolders of one revision instead of using git revisions per checkpoint (e.g. MAP-Neo,
+    # BAAI Aquila). subfolder_map overrides revision_template when set, same precedence as the
+    # offline pipeline's --subfolder-map overriding --steps.
+    revision_template: str = "step{}"
+    subfolder_map: str | None = None  # "step:path,step:path,..."; see resolve_subfolder_sources
+    # mirrors --tokenizer-ref: for repos whose per-checkpoint tokenizer doesn't load cleanly
+    # (bigscience/bloom-*-intermediate) or lives in a separate repo (m-a-p/neo_scalinglaw_*).
+    tokenizer_ref: str | None = None
 
 
 def build_registry(
@@ -220,6 +252,9 @@ def build_registry(
                 label=m.get("label"),
                 steps=m.get("steps"),
                 origin="catalog",
+                revision_template=m.get("revision_template", "step{}"),
+                subfolder_map=m.get("subfolder_map"),
+                tokenizer_ref=m.get("tokenizer_ref"),
             )
     if registry_file and registry_file.exists():
         try:
@@ -250,7 +285,7 @@ def save_user_registry() -> None:
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(entries, indent=2) + "\n")
-    os.replace(tmp, path)
+    tmp.replace(path)
 
 
 def model_steps(entry: RegistryEntry) -> list[int]:
@@ -278,7 +313,12 @@ def source_for(model_id: str, step: int) -> CheckpointSource:
             if src.step == step:
                 return src
         raise HTTPException(404, f"{model_id!r} has no local checkpoint for step {step}")
-    return resolve_sources(ref, str(step), final_only=False)[0]
+    if entry.subfolder_map:
+        for src in resolve_subfolder_sources(ref, entry.subfolder_map):
+            if src.step == step:
+                return src
+        raise HTTPException(404, f"{model_id!r} has no checkpoint for step {step}")
+    return resolve_sources(ref, str(step), final_only=False, revision_template=entry.revision_template)[0]
 
 
 def pick_device() -> str:
@@ -289,8 +329,10 @@ def pick_device() -> str:
     return "cpu"
 
 
-def load(src: CheckpointSource) -> tuple[Any, Any]:
-    key = (src.load_ref, src.revision)
+def load(model_id: str, src: CheckpointSource) -> tuple[Any, Any]:
+    # subfolder is part of the key: hub-subfolder suites (MAP-Neo, Aquila) have no per-checkpoint
+    # git revision, so (load_ref, revision) alone is the same for every step of the same suite.
+    key = (src.load_ref, src.revision, src.subfolder)
     if key in LOADED:
         LOADED.move_to_end(key)
         return LOADED[key]
@@ -300,8 +342,12 @@ def load(src: CheckpointSource) -> tuple[Any, Any]:
         del old_model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        print(f"evicted {old_key}", flush=True)
-    tok = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision, trust_remote_code=True)
+        logger.info("evicted %s", old_key)
+    entry = STATE["registry"].get(model_id)
+    if entry is None:
+        raise HTTPException(404, f"unknown model id {model_id!r}")
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(entry.tokenizer_ref, src)
+    tok = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
     # float32 by default: half-precision *compute* flips late-checkpoint top-1s (5/56 cells on
     # Pythia-70M step 143k), the same failure mode that ruled out int8 storage — the browser
     # path avoids it by casting fp16 weights to fp32 at session load, and the server must match
@@ -309,10 +355,12 @@ def load(src: CheckpointSource) -> tuple[Any, Any]:
     if STATE["device_map"]:
         # opt-in: shard very large models across devices via accelerate
         model = AutoModelForCausalLM.from_pretrained(
-            src.load_ref, revision=src.revision, dtype=STATE["dtype"], device_map="auto"
+            src.load_ref, revision=src.revision, subfolder=src.subfolder or "", dtype=STATE["dtype"], device_map="auto"
         )
     else:
-        model = AutoModelForCausalLM.from_pretrained(src.load_ref, revision=src.revision, dtype=STATE["dtype"])
+        model = AutoModelForCausalLM.from_pretrained(
+            src.load_ref, revision=src.revision, subfolder=src.subfolder or "", dtype=STATE["dtype"]
+        )
         model.to(pick_device())
     model.eval()
     LOADED[key] = (model, tok)
@@ -321,7 +369,7 @@ def load(src: CheckpointSource) -> tuple[Any, Any]:
 
 @app.get("/health")
 def health() -> HealthResponse:
-    return {"ok": True, "models": sorted(STATE["registry"]), "device": pick_device()}
+    return HealthResponse(ok=True, models=sorted(STATE["registry"]), device=pick_device())
 
 
 def _folder_dialog_cmd() -> list[str] | None:
@@ -370,20 +418,20 @@ def pick_folder() -> PickFolderResponse:
         raise HTTPException(400, "folder selection was cancelled")
     if proc.returncode != 0:
         raise HTTPException(500, f"folder dialog failed on the server machine: {proc.stderr.strip()[-200:]}")
-    return {"path": path.rstrip("/") or "/"}
+    return PickFolderResponse(path=path.rstrip("/") or "/")
 
 
 @app.get("/models")
 def list_models() -> list[ModelListEntry]:
     return [
-        {
-            "id": mid,
-            "ref": e.ref,
-            "mode": e.mode,
-            "label": e.label or mid,
-            "steps": model_steps(e),
-            "origin": e.origin,
-        }
+        ModelListEntry(
+            id=mid,
+            ref=e.ref,
+            mode=e.mode,
+            label=e.label or mid,
+            steps=model_steps(e),
+            origin=e.origin,
+        )
         for mid, e in sorted(STATE["registry"].items())
     ]
 
@@ -407,7 +455,7 @@ def validate_source(req: RegisterRequest) -> None:
         raise HTTPException(400, f"cannot resolve {req.ref!r} on the Hugging Face Hub: {e}") from e
 
 
-@app.post("/models", status_code=201)
+@app.post("/models", status_code=201, response_model_exclude_none=True)
 def register_model(req: RegisterRequest) -> RegisterResponse:
     if not MODEL_ID_RE.fullmatch(req.id):
         raise HTTPException(400, "id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -437,11 +485,8 @@ def register_model(req: RegisterRequest) -> RegisterResponse:
         except OSError as e:
             del STATE["registry"][req.id]  # keep memory and registry.json consistent
             raise HTTPException(500, f"could not persist registry: {e}") from e
-    print(f"registered {req.id} -> {req.ref} ({req.mode})", flush=True)
-    result: RegisterResponse = {"id": req.id, "ref": entry.ref, "mode": entry.mode, "steps": model_steps(entry)}
-    if entry.label is not None:
-        result["label"] = entry.label
-    return result
+    logger.info("registered %s -> %s (%s)", req.id, req.ref, req.mode)
+    return RegisterResponse(id=req.id, ref=entry.ref, mode=entry.mode, label=entry.label, steps=model_steps(entry))
 
 
 @app.delete("/models/{model_id}")
@@ -464,11 +509,11 @@ def unregister_model(model_id: str) -> RemoveResponse:
             STATE["registry"][model_id] = entry  # keep memory and registry.json consistent
             raise HTTPException(500, f"could not persist registry: {e}") from e
     # loaded weights (if any) stay resident until the LRU evicts them; only the registry changes
-    print(f"unregistered {model_id}", flush=True)
-    return {"removed": model_id}
+    logger.info("unregistered %s", model_id)
+    return RemoveResponse(removed=model_id)
 
 
-@app.post("/models/{model_id}/convert", status_code=202)
+@app.post("/models/{model_id}/convert", status_code=202, response_model_exclude_none=True)
 def convert_model(model_id: str) -> ConvertStatusResponse:
     """Run the full ONNX onboarding pipeline (add_model.py) for a registered model, in the
     background. On success the model graduates into web/public + models.json (browser-runnable
@@ -498,8 +543,8 @@ def convert_model(model_id: str) -> ConvertStatusResponse:
         job = {"status": "running", "log": deque(maxlen=50)}
         JOBS[model_id] = job
     threading.Thread(target=_run_convert, args=(model_id, job, cmd), daemon=True).start()
-    print(f"converting {model_id}: {' '.join(cmd)}", flush=True)
-    return {"id": model_id, "status": "running"}
+    logger.info("converting %s: %s", model_id, " ".join(cmd))
+    return ConvertStatusResponse(id=model_id, status="running")
 
 
 def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
@@ -538,21 +583,19 @@ def _run_convert(model_id: str, job: dict, cmd: list[str]) -> None:
                     save_user_registry()
                 except OSError as e:
                     job["log"].append(f"warning: could not update registry file: {e}")
-    print(f"conversion of {model_id}: {job['status']}", flush=True)
+    logger.info("conversion of %s: %s", model_id, job["status"])
 
 
-@app.get("/models/{model_id}/convert")
+@app.get("/models/{model_id}/convert", response_model_exclude_none=True)
 def convert_status(model_id: str) -> ConvertStatusResponse:
     with JOBS_LOCK:
         job = JOBS.get(model_id)
         if job is None:
             raise HTTPException(404, f"no conversion job for {model_id!r}")
-        result: ConvertStatusResponse = {"id": model_id, "status": job["status"], "log": list(job["log"])[-8:]}
+        note = None
         if job["status"] == "done" and not _IN_REPO:
-            result["note"] = (
-                f"exported — upload {STATE['models_root'] / model_id} to your model host to use it in-browser"
-            )
-        return result
+            note = f"exported — upload {STATE['models_root'] / model_id} to your model host to use it in-browser"
+        return ConvertStatusResponse(id=model_id, status=job["status"], log=list(job["log"])[-8:], note=note)
 
 
 @app.post("/tokenize")
@@ -568,24 +611,28 @@ def tokenize(req: TokenizeRequest) -> TokenizeResponse:
     if not steps:
         raise HTTPException(404, f"{req.model!r} has no checkpoints")
     src = source_for(req.model, steps[-1])
-    key = (src.load_ref, src.revision)
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(entry.tokenizer_ref, src)
+    key = (tok_load_ref, tok_rev, tok_subfolder)
     if key not in TOKENIZERS:
         while len(TOKENIZERS) >= 8:
             TOKENIZERS.popitem(last=False)
-        TOKENIZERS[key] = AutoTokenizer.from_pretrained(src.load_ref, revision=src.revision, trust_remote_code=True)
+        TOKENIZERS[key] = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
     tok = TOKENIZERS[key]
     # no special tokens: the app tracks the first content token, which must never be a BOS
     ids = tok(req.text, add_special_tokens=False)["input_ids"]
     tokens = [token_display_text(tok, t) for t in tok.convert_ids_to_tokens(ids)]
-    return {"ids": [int(i) for i in ids], "tokens": tokens}
+    return TokenizeResponse(ids=[int(i) for i in ids], tokens=tokens)
 
 
 def probe_cache_key(src: CheckpointSource, req: ProbeRequest) -> str:
     """Content key for one probe. JSON-encoded fields, not string concatenation: free-form
     prompt text must never be able to collide with the key of a different (text, targets).
     The compute dtype is part of the key: fp16 and fp32 forwards genuinely disagree at late
-    checkpoints, so a result computed at one precision must not replay as another."""
-    payload = [src.load_ref, src.revision, req.text, sorted(set(req.targets or [])), STATE["dtype"]]
+    checkpoints, so a result computed at one precision must not replay as another. subfolder is
+    part of the key for the same reason it's part of LOADED's key (see load()): hub-subfolder
+    suites have no per-checkpoint git revision, so (load_ref, revision) alone collides across
+    every step of the same suite."""
+    payload = [src.load_ref, src.revision, src.subfolder, req.text, sorted(set(req.targets or [])), STATE["dtype"]]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -595,7 +642,7 @@ def read_cache(cache_file: Path) -> dict | None:
     try:
         result = json.loads(cache_file.read_text())
     except json.JSONDecodeError:
-        print(f"corrupt cache file {cache_file}; recomputing", file=sys.stderr, flush=True)
+        logger.warning("corrupt cache file %s; recomputing", cache_file)
         cache_file.unlink(missing_ok=True)
         return None
     result["cached"] = True
@@ -618,7 +665,7 @@ def probe(req: ProbeRequest) -> dict[str, Any]:
 
 def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) -> dict[str, Any]:
     t0 = time.time()
-    model, tok = load(src)
+    model, tok = load(req.model, src)
     ids = tok(req.text)["input_ids"]
     if not 0 < len(ids) <= MAX_TOKENS:
         raise HTTPException(400, f"prompt must be 1..{MAX_TOKENS} tokens (got {len(ids)})")
@@ -674,7 +721,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     }
     tmp = cache_file.with_suffix(".tmp")
     tmp.write_text(json.dumps(result))
-    os.replace(tmp, cache_file)  # atomic: a crash mid-write must not leave a corrupt cache entry
+    tmp.replace(cache_file)  # atomic: a crash mid-write must not leave a corrupt cache entry
     return result
 
 
@@ -715,67 +762,101 @@ def default_models_json() -> Path:
     return Path(__file__).resolve().parent / "webapp" / "data" / "models.json"
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8017)
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--models-json", default=str(default_models_json()))
-    ap.add_argument("--extra", action="append", default=[], help="id=hf_ref[:final] or id=/local/dir (repeatable)")
-    ap.add_argument(
-        "--registry-file",
-        default=str(_STATE_HOME / "registry.json"),
-        help="where models registered via the web dialog / POST /models persist",
-    )
-    ap.add_argument("--cache-dir", default=str(_STATE_HOME / "probe-cache"))
-    ap.add_argument(
-        "--models-root",
-        default=str(_STATE_HOME / "exported-models"),
-        help="where dialog-triggered ONNX conversions write <id>/step*/...; served back at /models/",
-    )
-    ap.add_argument("--max-loaded", type=int, default=1, help="models kept in memory (heavy models: keep 1)")
-    ap.add_argument(
-        "--dtype",
-        choices=DTYPE_CHOICES,
-        default="float32",
-        help="compute dtype; float32 (default) matches the precomputed shards and the browser path, "
-        "lower precisions halve memory for heavy models but can flip late-checkpoint top-1s",
-    )
-    ap.add_argument(
-        "--device-map",
-        action="store_true",
-        help="load with device_map='auto' (requires accelerate; multi-device sharding is untested)",
-    )
-    ap.add_argument("--open", action="store_true", help="open the hosted web app pointed at this server")
-    args = ap.parse_args()
+class ServerConfig(BaseModel):
+    """Validated arguments for `server`; see `main`'s docstring for what each means."""
 
-    STATE["registry_file"] = Path(args.registry_file)
-    STATE["registry"] = build_registry(Path(args.models_json), STATE["registry_file"], args.extra)
-    STATE["cache_dir"] = Path(args.cache_dir)
+    port: int = 8017
+    host: str = "127.0.0.1"
+    models_json: Path = default_models_json()
+    extra: str = ""
+    registry_file: Path = _STATE_HOME / "registry.json"
+    cache_dir: Path = _STATE_HOME / "probe-cache"
+    models_root: Path = _STATE_HOME / "exported-models"
+    max_loaded: int = 1
+    dtype: DType = "float32"
+    device_map: bool = False
+    open: bool = False
+
+
+def main(
+    port: int = 8017,
+    host: str = "127.0.0.1",
+    models_json: str = str(default_models_json()),
+    extra: str = "",
+    registry_file: str = str(_STATE_HOME / "registry.json"),
+    cache_dir: str = str(_STATE_HOME / "probe-cache"),
+    models_root: str = str(_STATE_HOME / "exported-models"),
+    max_loaded: int = 1,
+    dtype: DType = "float32",
+    device_map: bool = False,
+    # named `open`, not e.g. `open_browser`: must match the `--open` flag fire derives from it.
+    # Shadows the builtin only inside this function's scope; do not add a real open(...) call
+    # here without aliasing (`import builtins` or similar) first.
+    open: bool = False,
+) -> None:
+    """Start the local probe server (+ the hosted web app, when a build is available).
+
+    Args:
+        port: TCP port to listen on.
+        host: bind address.
+        models_json: the app's model catalog; defaults to the checkout's copy or the wheel-bundled one.
+        extra: comma-separated "id=hf_ref[:final]" or "id=/local/dir" specs to extend the registry
+            beyond models_json (fire has no repeated-flag/append mechanism, so this is one
+            comma-joined flag rather than one `--extra` per model), e.g.
+            "my-run=/path/to/trainer_output,llama=meta-llama/Llama-3.2-1B:final".
+        registry_file: where models registered via the web dialog / POST /models persist.
+        cache_dir: where probe results are cached, keyed by (model ref, revision, prompt).
+        models_root: where dialog-triggered ONNX conversions write <id>/step*/...; served back at /models/.
+        max_loaded: models kept in memory (heavy models: keep 1).
+        dtype: compute dtype; float32 (default) matches the precomputed shards and the browser path,
+            lower precisions halve memory for heavy models but can flip late-checkpoint top-1s.
+        device_map: load with device_map='auto' (requires accelerate; multi-device sharding is untested).
+        open: open the hosted web app pointed at this server.
+    """
+    cfg = ServerConfig(
+        port=port,
+        host=host,
+        models_json=models_json,  # type: ignore[arg-type]  # pydantic coerces str -> Path
+        extra=extra,
+        registry_file=registry_file,  # type: ignore[arg-type]
+        cache_dir=cache_dir,  # type: ignore[arg-type]
+        models_root=models_root,  # type: ignore[arg-type]
+        max_loaded=max_loaded,
+        dtype=dtype,
+        device_map=device_map,
+        open=open,
+    )
+    extras = [e for e in cfg.extra.split(",") if e]
+
+    STATE["registry_file"] = cfg.registry_file
+    STATE["registry"] = build_registry(cfg.models_json, STATE["registry_file"], extras)
+    STATE["cache_dir"] = cfg.cache_dir
     STATE["cache_dir"].mkdir(parents=True, exist_ok=True)
-    STATE["max_loaded"] = args.max_loaded
-    STATE["dtype"] = args.dtype
-    STATE["device_map"] = args.device_map
-    STATE["models_root"] = Path(args.models_root)
+    STATE["max_loaded"] = cfg.max_loaded
+    STATE["dtype"] = cfg.dtype
+    STATE["device_map"] = cfg.device_map
+    STATE["models_root"] = cfg.models_root
     STATE["models_root"].mkdir(parents=True, exist_ok=True)
     # serve converted ONNX pairs back to the app (mounted after the API routes, which win)
     app.mount("/models", StaticFiles(directory=STATE["models_root"]), name="models")
-    if args.extra:
+    if extras:
         save_user_registry()  # --extra entries persist like dialog-registered ones
-    print(f"registry: {sorted(STATE['registry'])}; cache: {STATE['cache_dir']}", flush=True)
-    display_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0") else args.host
+    logger.info("registry: %s; cache: %s", sorted(STATE["registry"]), STATE["cache_dir"])
+    display_host = "localhost" if cfg.host in ("127.0.0.1", "0.0.0.0") else cfg.host
     webapp = _webapp_root()
     if webapp is not None:
         # serve the web app itself: one local port for UI + API, fully offline-capable
         app.mount("/", StaticFiles(directory=webapp, html=True), name="webapp")
-        app_url = f"http://{display_host}:{args.port}/"
-        print(f"probe server + web app ready — open {app_url}", flush=True)
+        app_url = f"http://{display_host}:{cfg.port}/"
+        logger.info("probe server + web app ready — open %s", app_url)
     else:
-        app_url = f"https://iamtatsuki05.github.io/lenslapse/?probe=http://{display_host}:{args.port}"
-        print(f"probe server ready (no local web bundle) — open {app_url}", flush=True)
-    if args.open:
+        app_url = f"https://iamtatsuki05.github.io/lenslapse/?probe=http://{display_host}:{cfg.port}"
+        logger.info("probe server ready (no local web bundle) — open %s", app_url)
+    if cfg.open:
         threading.Timer(1.5, webbrowser.open, [app_url]).start()
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    uvicorn.run(app, host=cfg.host, port=cfg.port, log_level="warning")
 
 
 if __name__ == "__main__":
-    main()
+    configure_cli_logging()
+    fire.Fire(main)

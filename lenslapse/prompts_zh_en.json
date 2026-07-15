@@ -1,0 +1,32 @@
+[
+  {"text": "The capital of Japan is the city of", "gold": " Tokyo", "story": "fact"},
+  {"text": "The Eiffel Tower is located in the city of", "gold": " Paris", "story": "fact"},
+  {"text": "Water is made of hydrogen and", "gold": " oxygen", "story": "fact"},
+  {"text": "The first president of the United States was George", "gold": " Washington", "story": "fact"},
+  {"text": "The opposite of hot is", "gold": " cold", "story": "relation"},
+  {"text": "Paris is to France as Tokyo is to", "gold": " Japan", "story": "relation"},
+  {"text": "Two plus two equals", "gold": " four", "story": "math"},
+  {"text": "3 + 4 =", "gold": " 7", "story": "math"},
+  {"text": "The quick brown fox jumps over the lazy", "gold": " dog", "story": "idiom"},
+  {"text": "Once upon a", "gold": " time", "story": "idiom"},
+  {"text": "Thank you very", "gold": " much", "story": "idiom"},
+  {"text": "The keys to the cabinet", "gold": " are", "story": "syntax"},
+  {"text": "def add(a, b):\n    return a +", "gold": " b", "story": "code"},
+  {"text": "import numpy as", "gold": " np", "story": "code"},
+  {"text": "The DNA molecule has the shape of a double", "gold": " helix", "story": "fact"},
+  {
+    "text": "Mr. and Mrs. Dursley, of number four, Privet Drive, were proud to say that they were perfectly",
+    "gold": " normal",
+    "story": "copy"
+  },
+  {"text": "中国的首都是", "gold": "北京", "story": "fact"},
+  {"text": "法国的首都是巴黎，日本的首都是", "gold": "东京", "story": "relation"},
+  {"text": "水是由氢和", "gold": "氧", "story": "fact"},
+  {"text": "长城位于", "gold": "中国", "story": "fact"},
+  {"text": "二加二等于", "gold": "四", "story": "math"},
+  {"text": "3 + 4 =", "gold": "7", "story": "math"},
+  {"text": "画蛇添", "gold": "足", "story": "idiom"},
+  {"text": "一日不见，如隔三", "gold": "秋", "story": "idiom"},
+  {"text": "床前明月光，疑是地上", "gold": "霜", "story": "copy"},
+  {"text": "# 计算两数之和\ndef add(a, b):\n    return a +", "gold": " b", "story": "code"}
+]

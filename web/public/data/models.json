@@ -26,21 +26,42 @@
     {
       "id": "aquila-135m",
       "hf": "aquila-135m",
-      "label": "Aquila 135M (中文/EN)",
-      "mode": "local",
-      "source": "BAAI/Aquila-135M-Intermediate"
+      "label": "Aquila 135M (\u4e2d\u6587/EN)",
+      "mode": "suite",
+      "source": "BAAI/Aquila-135M-Intermediate",
+      "steps": [
+        250000,
+        500000,
+        750000,
+        1000000,
+        1300000,
+        1410844
+      ],
+      "subfolder_map": "250000:pretrain/iter_0250000_hf,500000:pretrain/iter_0500000_hf,750000:pretrain/iter_0750000_hf,1000000:pretrain/iter_1000000_hf,1300000:pretrain/iter_1300000_hf,1410844:pretrain/iter_1410844_hf"
     },
     {
       "id": "mapneo-250m",
       "hf": "mapneo-250m",
-      "label": "MAP-Neo 250M (中文/EN)",
-      "mode": "local",
-      "source": "m-a-p/neo_scalinglaw_250M"
+      "label": "MAP-Neo 250M (\u4e2d\u6587/EN)",
+      "mode": "suite",
+      "source": "m-a-p/neo_scalinglaw_250M",
+      "steps": [
+        16780,
+        33550,
+        67110,
+        100660,
+        201330,
+        402650,
+        704640,
+        1002650
+      ],
+      "subfolder_map": "16780:hf_ckpt/16.78B,33550:hf_ckpt/33.55B,67110:hf_ckpt/67.11B,100660:hf_ckpt/100.66B,201330:hf_ckpt/201.33B,402650:hf_ckpt/402.65B,704640:hf_ckpt/704.64B,1002650:hf_ckpt/1002.65B",
+      "tokenizer_ref": "m-a-p/neo_7b"
     },
     {
       "id": "bloom-560m",
       "hf": "bloom-560m",
-      "label": "BLOOM 560M (多言語)",
+      "label": "BLOOM 560M (\u591a\u8a00\u8a9e)",
       "mode": "suite",
       "source": "bigscience/bloom-560m-intermediate",
       "steps": [
@@ -52,7 +73,9 @@
         400000,
         500000,
         600000
-      ]
+      ],
+      "revision_template": "global_step{}",
+      "tokenizer_ref": "bigscience/bloom-560m"
     },
     {
       "id": "smollm2-135m",

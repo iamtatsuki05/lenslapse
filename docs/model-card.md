@@ -145,8 +145,9 @@ revision per checkpoint, Aquila's tokenizer requires `trust_remote_code`, and BL
 tokenizer files fail to load under current `transformers` (a `transformers`-side regression, not a
 BLOOM error — its tokenizer is loaded from the final `bigscience/bloom-560m` repo instead, identical
 across checkpoints of the same run); see `lenslapse/sources.py`'s `resolve_subfolder_sources` /
-`--subfolder-map`, `--revision-template`, `--tokenizer-ref`, and `lenslapse/prompts_zh.json` (the
-Chinese curated-prompt set used in place of the English default) for the exact commands.
+`--subfolder-map`, `--revision-template`, `--tokenizer-ref`, and `lenslapse/prompts_zh_en.json` (the
+combined English + Chinese curated-prompt set used for these three multilingual models, in place of
+the English-only default) for the exact commands.
 
 ## License and attribution
 

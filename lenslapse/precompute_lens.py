@@ -16,16 +16,28 @@ plus embeddings; lens(h) = embed_out(final_layer_norm(h)). lens at the last laye
 actual output distribution (validated in export_checkpoints.py).
 """
 
-import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
+import fire
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from pydantic import BaseModel, field_validator
+from transformers import AutoModelForCausalLM
 
-from .arch import resolve
-from .sources import resolve_sources, resolve_subfolder_sources, resolve_tokenizer_ref, token_display_text
+from lenslapse.arch import resolve
+from lenslapse.logging_utils import configure_cli_logging
+from lenslapse.sources import (
+    coerce_fire_csv_arg,
+    load_tokenizer,
+    resolve_sources,
+    resolve_subfolder_sources,
+    resolve_tokenizer_ref,
+    token_display_text,
+)
+
+logger = logging.getLogger(__name__)
 
 PROMPTS = [
     {"text": "The capital of Japan is the city of", "gold": " Tokyo", "story": "fact"},
@@ -77,55 +89,71 @@ def lens_all(model: "torch.nn.Module", input_ids: "torch.Tensor") -> "torch.Tens
     return torch.log_softmax(logits.float(), dim=-1)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="EleutherAI/pythia-70m")
-    ap.add_argument(
-        "--steps", default="0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
-    )
-    ap.add_argument("--out", required=True)
-    ap.add_argument(
-        "--final-only", action="store_true", help="single checkpoint (revision main) instead of a step suite"
-    )
-    ap.add_argument(
-        "--subfolder-map",
-        default=None,
-        help='hub-subfolder suite: "step:path,step:path,..." — see export_checkpoints.py; overrides --steps',
-    )
-    ap.add_argument(
-        "--prompts-file",
-        default=None,
-        help="JSON file with the same shape as PROMPTS (list of {text, gold, story}); "
-        "defaults to the built-in English curated set",
-    )
-    ap.add_argument(
-        "--revision-template",
-        default="step{}",
-        help='revision naming for hub suites, e.g. "global_step{}" for bigscience/bloom-*-intermediate',
-    )
-    ap.add_argument(
-        "--tokenizer-ref",
-        default=None,
-        help="load the tokenizer from a different ref than the checkpoint weights; see export_checkpoints.py",
-    )
-    args = ap.parse_args()
+class PrecomputeConfig(BaseModel):
+    """Validated arguments for `precompute_lens`; see `main`'s docstring for what each means."""
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    model: str = "EleutherAI/pythia-70m"
+    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
+    out: Path
+    final_only: bool = False
+    subfolder_map: str | None = None
+    prompts_file: str | None = None
+    revision_template: str = "step{}"
+    tokenizer_ref: str | None = None
+
+    _coerce_steps = field_validator("steps", mode="before")(coerce_fire_csv_arg)
+
+
+def main(
+    out: str,
+    model: str = "EleutherAI/pythia-70m",
+    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000",
+    final_only: bool = False,
+    subfolder_map: str | None = None,
+    prompts_file: str | None = None,
+    revision_template: str = "step{}",
+    tokenizer_ref: str | None = None,
+) -> None:
+    """Precompute per-prompt logit-lens shards across a model's training checkpoints.
+
+    Args:
+        out: output directory for `index.json` and per-prompt `p{i}.json` shards.
+        model: HF id or local directory.
+        steps: comma-separated training steps for a hub suite (ignored if `subfolder_map` is set).
+        final_only: single checkpoint (revision "main") instead of a step suite.
+        subfolder_map: "step:path,step:path,..." for repos that nest checkpoints as subfolders of
+            one revision instead of using git revisions per checkpoint; overrides `steps`.
+        prompts_file: JSON file with the same shape as PROMPTS (list of {text, gold, story});
+            defaults to the built-in English curated set.
+        revision_template: revision naming for hub suites, e.g. "global_step{}" for
+            bigscience/bloom-*-intermediate.
+        tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights, as
+            "repo_id" or "repo_id@revision"; see export_checkpoints.py.
+    """
+    cfg = PrecomputeConfig(
+        model=model,
+        steps=steps,
+        out=out,  # type: ignore[arg-type]  # pydantic coerces str -> Path
+        final_only=final_only,
+        subfolder_map=subfolder_map,
+        prompts_file=prompts_file,
+        revision_template=revision_template,
+        tokenizer_ref=tokenizer_ref,
+    )
+
+    cfg.out.mkdir(parents=True, exist_ok=True)
     sources = (
-        resolve_subfolder_sources(args.model, args.subfolder_map)
-        if args.subfolder_map
-        else resolve_sources(args.model, args.steps, args.final_only, args.revision_template)
+        resolve_subfolder_sources(cfg.model, cfg.subfolder_map)
+        if cfg.subfolder_map
+        else resolve_sources(cfg.model, cfg.steps, cfg.final_only, cfg.revision_template)
     )
     by_step = {src.step: src for src in sources}
-    steps = sorted(by_step)
-    final_step = steps[-1]
-    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(args.tokenizer_ref, sources[0])
-    tok = AutoTokenizer.from_pretrained(
-        tok_load_ref, revision=tok_rev, subfolder=tok_subfolder, trust_remote_code=True
-    )
+    steps_sorted = sorted(by_step)
+    final_step = steps_sorted[-1]
+    tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(cfg.tokenizer_ref, sources[0])
+    tok = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
 
-    prompt_defs = json.loads(Path(args.prompts_file).read_text()) if args.prompts_file else PROMPTS
+    prompt_defs = json.loads(Path(cfg.prompts_file).read_text()) if cfg.prompts_file else PROMPTS
     prompts: list[dict[str, Any]] = []
     for i, p in enumerate(prompt_defs):
         ids = tok(p["text"])["input_ids"]
@@ -134,19 +162,19 @@ def main() -> None:
         prompts.append({"id": i, **p, "ids": ids, "gold_id": gold_id})
 
     # Pass 1: final step first to fix per-position targets.
-    order = [final_step] + [s for s in steps if s != final_step]
+    order = [final_step] + [s for s in steps_sorted if s != final_step]
     targets: dict[Any, list[list[int]]] = {}  # prompt_id -> [pos] -> target ids
     shards: dict[Any, dict[str, Any]] = {i: {"vocab": {}, "steps": {}} for i in range(len(prompts))}
 
     for step in order:
         src = by_step[step]
-        model = AutoModelForCausalLM.from_pretrained(
+        step_model = AutoModelForCausalLM.from_pretrained(
             src.load_ref, revision=src.revision, subfolder=src.subfolder or "", dtype=torch.float32
         )
-        model.eval()
+        step_model.eval()
         for p in prompts:
             ids = torch.tensor([p["ids"]])
-            lp = lens_all(model, ids)  # [L+1, T, V] log-probs
+            lp = lens_all(step_model, ids)  # [L+1, T, V] log-probs
             probs = lp.exp()
             top = torch.topk(probs, TOPK, dim=-1)  # values/indices [L+1, T, K]
 
@@ -180,15 +208,15 @@ def main() -> None:
             ref_ids = {int(i) for layer in entry["top"] for pos in layer for i, _ in pos} | set(all_tgt_ids)
             for tid in ref_ids:
                 sh["vocab"].setdefault(str(tid), token_display_text(tok, tok.convert_ids_to_tokens([tid])[0]))
-        del model
-        print(f"[step{step}] done", flush=True)
+        del step_model
+        logger.info("[step%d] done", step)
 
         # persist incrementally so partial runs are usable
         for p in prompts:
-            (out_dir / f"p{p['id']}.json").write_text(json.dumps(shards[p["id"]], separators=(",", ":")))
+            (cfg.out / f"p{p['id']}.json").write_text(json.dumps(shards[p["id"]], separators=(",", ":")))
         index = {
-            "model": args.model,
-            "steps": [s for s in steps if str(s) in shards[0]["steps"]],
+            "model": cfg.model,
+            "steps": [s for s in steps_sorted if str(s) in shards[0]["steps"]],
             "prompts": [
                 {
                     "id": p["id"],
@@ -203,10 +231,13 @@ def main() -> None:
                 for p in prompts
             ],
         }
-        (out_dir / "index.json").write_text(json.dumps(index, separators=(",", ":")))
+        (cfg.out / "index.json").write_text(json.dumps(index, separators=(",", ":")))
 
-    print("ALL_DONE", flush=True)
+    # the completion signal, not a diagnostic message: scripts pipe stdout and grep for this,
+    # so it must stay on print() rather than move to the logger (which defaults to stderr).
+    print("ALL_DONE")
 
 
 if __name__ == "__main__":
-    main()
+    configure_cli_logging()
+    fire.Fire(main)

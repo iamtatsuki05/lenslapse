@@ -13,9 +13,8 @@ to the same on-disk state. Either way a result computed here replays instantly i
 "live - server" mode, and vice versa. `--json` prints the exact payload the web app receives.
 """
 
-import argparse
 import json
-import sys
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -24,16 +23,24 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
+import fire
+from pydantic import BaseModel, field_validator
+
 # sources.py has no torch/fastapi import — cheap to import eagerly even in pure-HTTP mode,
 # unlike `server`, which LocalBackend only imports lazily (see its __init__).
-from .sources import DTYPE_CHOICES, MODE_CHOICES, DType, Mode
+from lenslapse.logging_utils import configure_cli_logging
+from lenslapse.sources import DType, Mode, coerce_fire_csv_arg
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SERVER = "http://localhost:8017"
 _T = TypeVar("_T")
 
 
 def _eprint(message: str) -> None:
-    print(message, file=sys.stderr, flush=True)
+    """Progress/status message, not a command's result — logged (stderr by default), so piping
+    `--json` output to another tool (e.g. `| jq`) never sees anything but the actual payload."""
+    logger.info(message)
 
 
 class Backend(Protocol):
@@ -121,7 +128,7 @@ class LocalBackend:
     where = "in-process"
 
     def __init__(self, device_map: bool = False, dtype: DType = "float32") -> None:
-        from . import server  # deferred: imports torch, which HTTP mode must not pay for
+        from lenslapse import server  # deferred: imports torch, which HTTP mode must not pay for
 
         self._server = server
         server.STATE["registry_file"] = server._STATE_HOME / "registry.json"
@@ -169,20 +176,29 @@ class LocalBackend:
         return self.convert_start(model_id)  # same guidance either way
 
 
-def choose_backend(args: argparse.Namespace) -> Backend:
-    if args.server:
-        base = str(args.server).rstrip("/")
+class ConnectionConfig(BaseModel):
+    """Which backend to drive — shared by every command; see `probe`'s docstring for each field."""
+
+    server: str | None = None
+    local: bool = False
+    device_map: bool = False
+    dtype: DType = "float32"
+
+
+def choose_backend(conn: ConnectionConfig) -> Backend:
+    if conn.server:
+        base = str(conn.server).rstrip("/")
         if "://" not in base:
             base = f"http://{base}"  # `--server localhost:9000` must not read as an unreachable server
         if not server_alive(base):
             raise SystemExit(f"no probe server responding at {base}")
         return HttpBackend(base)
-    if not args.local and server_alive(DEFAULT_SERVER):
+    if not conn.local and server_alive(DEFAULT_SERVER):
         _eprint(f"using the probe server at {DEFAULT_SERVER} (pass --local to run in-process instead)")
         return HttpBackend(DEFAULT_SERVER)
-    if not args.local:
+    if not conn.local:
         _eprint(f"no probe server at {DEFAULT_SERVER} — running in-process")
-    return LocalBackend(device_map=args.device_map, dtype=args.dtype)
+    return LocalBackend(device_map=conn.device_map, dtype=conn.dtype)
 
 
 def parse_targets(spec: str | None) -> list[int] | None:
@@ -222,27 +238,42 @@ def _checked_pos(pos_arg: int | None, positions: int) -> int:
     return pos
 
 
-def cmd_probe(backend: Backend, args: argparse.Namespace) -> None:
-    entry = model_entry(backend, args.model)
+class ProbeCliConfig(ConnectionConfig):
+    """Validated arguments for `probe`; see `probe`'s docstring for what each means."""
+
+    model: str
+    text: str
+    step: int | None = None
+    pos: int | None = None
+    targets: str | None = None
+    # named json_output, not json: pydantic.BaseModel already defines a (deprecated) .json() method,
+    # and mypy rejects a field that overrides a method with an incompatible type.
+    json_output: bool = False
+
+    _coerce_targets = field_validator("targets", mode="before")(coerce_fire_csv_arg)
+
+
+def cmd_probe(backend: Backend, cfg: ProbeCliConfig) -> None:
+    entry = model_entry(backend, cfg.model)
     steps: list[int] = entry["steps"]
-    step = args.step
+    step = cfg.step
     if step is None:
         if not steps:
-            raise SystemExit(f"{args.model!r} has no checkpoints (local directory moved?)")
+            raise SystemExit(f"{cfg.model!r} has no checkpoints (local directory moved?)")
         step = steps[-1]
         _eprint(f"probing the last checkpoint (step {step:,}); pass --step to pick another")
     elif step not in steps:
         if entry["mode"] == "suite":
             # the registered grid is a subset of the hub's step{N} revisions — let the server try
-            _eprint(f"note: step {step:,} is outside {args.model!r}'s registered grid; trying that hub revision")
+            _eprint(f"note: step {step:,} is outside {cfg.model!r}'s registered grid; trying that hub revision")
         else:
-            raise SystemExit(f"{args.model!r} has no checkpoint for step {step}; available: {_fmt_steps(steps)}")
-    res = backend.probe(args.model, step, args.text, parse_targets(args.targets))
-    if args.json:
+            raise SystemExit(f"{cfg.model!r} has no checkpoint for step {step}; available: {_fmt_steps(steps)}")
+    res = backend.probe(cfg.model, step, cfg.text, parse_targets(cfg.targets))
+    if cfg.json_output:
         print(json.dumps(res, ensure_ascii=False))
         return
     grid = res["grid"]
-    pos = _checked_pos(args.pos, grid["positions"])
+    pos = _checked_pos(cfg.pos, grid["positions"])
     tokens = res["tokens"]
     head = f"{res['model']} · step {res['step']:,} · {res['device']} · forward {res['timing']['forward']} ms"
     print(head + (" · replayed from cache" if res.get("cached") else ""))
@@ -257,31 +288,47 @@ def cmd_probe(backend: Backend, args: argparse.Namespace) -> None:
         print(f"target {t['token']!r} (id {tid}): p={t['p'][-1][pos]:.4f} rank={t['r'][-1][pos]} at the final layer")
 
 
-def cmd_trace(backend: Backend, args: argparse.Namespace) -> None:
-    steps: list[int] = model_entry(backend, args.model)["steps"]
+class TraceCliConfig(ConnectionConfig):
+    """Validated arguments for `trace`; see `trace`'s docstring for what each means."""
+
+    model: str
+    text: str
+    pos: int | None = None
+    layer: int | None = None
+    top: int = 3
+    targets: str | None = None
+    # named json_output, not json: pydantic.BaseModel already defines a (deprecated) .json() method,
+    # and mypy rejects a field that overrides a method with an incompatible type.
+    json_output: bool = False
+
+    _coerce_targets = field_validator("targets", mode="before")(coerce_fire_csv_arg)
+
+
+def cmd_trace(backend: Backend, cfg: TraceCliConfig) -> None:
+    steps: list[int] = model_entry(backend, cfg.model)["steps"]
     if len(steps) < 2:
         raise SystemExit(
-            f"{args.model!r} has {len(steps)} checkpoint(s); tracing needs a suite — use `lenslapse probe`"
+            f"{cfg.model!r} has {len(steps)} checkpoint(s); tracing needs a suite — use `lenslapse probe`"
         )
-    if not 1 <= args.top <= 10:
-        raise SystemExit(f"--top must be 1..10 (the server returns 10 candidates per cell), got {args.top}")
-    ids = parse_targets(args.targets)
+    if not 1 <= cfg.top <= 10:
+        raise SystemExit(f"--top must be 1..10 (the server returns 10 candidates per cell), got {cfg.top}")
+    ids = parse_targets(cfg.targets)
     if ids is None:
         # same convention as the UI (and the precomputed shards): fix the tracked tokens from
         # the FINAL checkpoint — final-layer top-k at the traced position
         _eprint(f"fixing targets from the final checkpoint (step {steps[-1]:,})…")
-        final = backend.probe(args.model, steps[-1], args.text)
-        pos = _checked_pos(args.pos, final["grid"]["positions"])
-        ids = [i for _, _, i in final["grid"]["cells"][-1][pos]["top"][: args.top]]
+        final = backend.probe(cfg.model, steps[-1], cfg.text)
+        final_pos = _checked_pos(cfg.pos, final["grid"]["positions"])
+        ids = [i for _, _, i in final["grid"]["cells"][-1][final_pos]["top"][: cfg.top]]
 
     labels: list[str] = []
     widths: list[int] = []
     collected: list[dict[str, Any]] = []
-    layer = args.layer
-    pos = args.pos  # re-checked against the first result below (grid shape is constant across steps)
+    layer = cfg.layer
+    pos = cfg.pos  # re-checked against the first result below (grid shape is constant across steps)
     for n, st in enumerate(steps, start=1):
         _eprint(f"step {st:>9,}  ({n}/{len(steps)})")
-        res = backend.probe(args.model, st, args.text, ids)
+        res = backend.probe(cfg.model, st, cfg.text, ids)
         tgt = res["tgt"]
         if not labels:
             grid = res["grid"]
@@ -291,18 +338,18 @@ def cmd_trace(backend: Backend, args: argparse.Namespace) -> None:
                 raise SystemExit(f"--layer must be 0..{grid['layers'] - 1} for this model, got {layer}")
             labels = [tgt[str(i)]["token"] for i in ids]
             widths = [max(len(repr(lab)), 16) for lab in labels]
-            if not args.json:
+            if not cfg.json_output:
                 where = f"layer {layer}, position {pos} ({res['tokens'][pos]!r})"
-                print(f"{res['model']} · “{args.text}” · {len(steps)} checkpoints · {where}")
+                print(f"{res['model']} · “{cfg.text}” · {len(steps)} checkpoints · {where}")
                 print(f"{'step':>10}  " + "  ".join(repr(lab).ljust(w) for lab, w in zip(labels, widths)))
-        if not args.json:
+        if not cfg.json_output:
             cells = [f"{tgt[str(i)]['p'][layer][pos]:.4f} (r{tgt[str(i)]['r'][layer][pos]})" for i in ids]
             print(f"{st:>10,}  " + "  ".join(c.ljust(w) for c, w in zip(cells, widths)))
         collected.append({"step": st, "tgt": tgt, "cached": res.get("cached", False)})
-    if args.json:
+    if cfg.json_output:
         payload = {
-            "model": args.model,
-            "text": args.text,
+            "model": cfg.model,
+            "text": cfg.text,
             "layer": layer,
             "pos": pos,
             "targets": [{"id": i, "token": lab} for i, lab in zip(ids, labels)],
@@ -321,9 +368,147 @@ def _fmt_steps(steps: list[int]) -> str:
     return f"{steps[0]:,} … {steps[-1]:,} ({len(steps)} checkpoints)"
 
 
-def cmd_models(backend: Backend, args: argparse.Namespace) -> None:
-    action = getattr(args, "action", None) or "list"
-    if action == "list":
+def probe(
+    model: str,
+    text: str,
+    step: int | None = None,
+    pos: int | None = None,
+    targets: str | None = None,
+    # named `json`, not `json_output`: must match the `--json` flag fire derives from it. Shadows
+    # the `json` module only inside this function's scope; it never calls json.dumps/loads
+    # itself (that lives in cmd_probe, via cfg.json_output) — keep it that way.
+    json: bool = False,
+    server: str | None = None,
+    local: bool = False,
+    device_map: bool = False,
+    dtype: DType = "float32",
+) -> None:
+    """One logit-lens pass — the UI's "Live probe" button.
+
+    Args:
+        model: registered model id (see `lenslapse models`).
+        text: prompt text.
+        step: checkpoint step (default: the model's last).
+        pos: token position to print (default: last).
+        targets: comma-separated token ids to track exactly.
+        json: print the full probe payload (what the web app receives).
+        server: probe server to drive (default: auto-detect http://localhost:8017, else run in-process).
+        local: run in-process even if a probe server is running.
+        device_map: in-process only: load with device_map='auto'.
+        dtype: in-process only: compute dtype (float32 matches the shards; lower halves memory).
+    """
+    cfg = ProbeCliConfig(
+        model=model,
+        text=text,
+        step=step,
+        pos=pos,
+        targets=targets,
+        json_output=json,
+        server=server,
+        local=local,
+        device_map=device_map,
+        dtype=dtype,
+    )
+    backend = choose_backend(cfg)
+    cmd_probe(backend, cfg)
+
+
+def trace(
+    model: str,
+    text: str,
+    pos: int | None = None,
+    layer: int | None = None,
+    top: int = 3,
+    targets: str | None = None,
+    # named `json`, not `json_output`: must match the `--json` flag fire derives from it. Shadows
+    # the `json` module only inside this function's scope; it never calls json.dumps/loads
+    # itself (that lives in cmd_trace, via cfg.json_output) — keep it that way.
+    json: bool = False,
+    server: str | None = None,
+    local: bool = False,
+    device_map: bool = False,
+    dtype: DType = "float32",
+) -> None:
+    """Probe every checkpoint — the UI's "trace across training" button.
+
+    Args:
+        model: registered model id (see `lenslapse models`).
+        text: prompt text.
+        pos: token position to trace (default: last).
+        layer: layer whose probability the table shows (default: final).
+        top: how many final-checkpoint top tokens to track (default: 3).
+        targets: track these token ids instead of the final-checkpoint top-k.
+        json: print the whole trajectory as JSON (table goes away).
+        server: probe server to drive (default: auto-detect http://localhost:8017, else run in-process).
+        local: run in-process even if a probe server is running.
+        device_map: in-process only: load with device_map='auto'.
+        dtype: in-process only: compute dtype (float32 matches the shards; lower halves memory).
+    """
+    cfg = TraceCliConfig(
+        model=model,
+        text=text,
+        pos=pos,
+        layer=layer,
+        top=top,
+        targets=targets,
+        json_output=json,
+        server=server,
+        local=local,
+        device_map=device_map,
+        dtype=dtype,
+    )
+    backend = choose_backend(cfg)
+    cmd_trace(backend, cfg)
+
+
+class ModelsAddCliConfig(ConnectionConfig):
+    """Validated arguments for `models add`; see `ModelsCommands.add`'s docstring for what each means."""
+
+    ref: str
+    id: str
+    label: str | None = None
+    mode: Mode | None = None
+    steps: str | None = None
+
+    _coerce_steps = field_validator("steps", mode="before")(coerce_fire_csv_arg)
+
+
+class ModelsIdCliConfig(ConnectionConfig):
+    """Validated arguments for `models remove`/`models convert`: a model id + connection flags."""
+
+    id: str
+
+
+class ModelsCommands:
+    """`lenslapse models [list|add|remove|convert]` — the UI's "models" dialog."""
+
+    def __call__(
+        self,
+        server: str | None = None,
+        local: bool = False,
+        device_map: bool = False,
+        dtype: DType = "float32",
+    ) -> None:
+        """Bare `lenslapse models` (no subcommand) shows every registered model, same as `list`."""
+        self.list(server=server, local=local, device_map=device_map, dtype=dtype)
+
+    def list(
+        self,
+        server: str | None = None,
+        local: bool = False,
+        device_map: bool = False,
+        dtype: DType = "float32",
+    ) -> None:
+        """Show every registered model.
+
+        Args:
+            server: probe server to drive (default: auto-detect http://localhost:8017, else run in-process).
+            local: run in-process even if a probe server is running.
+            device_map: in-process only: load with device_map='auto'.
+            dtype: in-process only: compute dtype (float32 matches the shards; lower halves memory).
+        """
+        cfg = ConnectionConfig(server=server, local=local, device_map=device_map, dtype=dtype)
+        backend = choose_backend(cfg)
         entries = backend.models()
         if not entries:
             print("no models registered")
@@ -332,28 +517,103 @@ def cmd_models(backend: Backend, args: argparse.Namespace) -> None:
             steps = m["steps"]
             span = f"{len(steps)} step" + ("s" if len(steps) != 1 else "")
             print(f"{m['id']:<24} {m['mode']:<6} {span:>9}  {m['origin']:<8} {m['ref']}")
-    elif action == "add":
-        mode = args.mode or infer_mode(args.ref, args.steps)
-        payload: dict[str, Any] = {"id": args.id, "ref": args.ref, "mode": mode}
-        if args.label:
-            payload["label"] = args.label
-        if args.steps:
+
+    def add(
+        self,
+        ref: str,
+        id: str,
+        label: str | None = None,
+        mode: Mode | None = None,
+        steps: str | None = None,
+        server: str | None = None,
+        local: bool = False,
+        device_map: bool = False,
+        dtype: DType = "float32",
+    ) -> None:
+        """Register a model (HF id or a folder on the server machine).
+
+        Args:
+            ref: HF id or local checkpoint directory.
+            id: id the app shows in its model picker.
+            label: display label; defaults to `id`.
+            mode: default: local if `ref` is a directory, suite if `steps` is given, else final.
+            steps: suite only: comma-separated step numbers.
+            server: probe server to drive (default: auto-detect http://localhost:8017, else run in-process).
+            local: run in-process even if a probe server is running.
+            device_map: in-process only: load with device_map='auto'.
+            dtype: in-process only: compute dtype (float32 matches the shards; lower halves memory).
+        """
+        cfg = ModelsAddCliConfig(
+            ref=ref,
+            id=id,
+            label=label,
+            mode=mode,
+            steps=steps,
+            server=server,
+            local=local,
+            device_map=device_map,
+            dtype=dtype,
+        )
+        backend = choose_backend(cfg)
+        resolved_mode = cfg.mode or infer_mode(cfg.ref, cfg.steps)
+        payload: dict[str, Any] = {"id": cfg.id, "ref": cfg.ref, "mode": resolved_mode}
+        if cfg.label:
+            payload["label"] = cfg.label
+        if cfg.steps:
             try:
-                payload["steps"] = [int(s) for s in args.steps.split(",") if s.strip()]
+                payload["steps"] = [int(s) for s in cfg.steps.split(",") if s.strip()]
             except ValueError as e:
-                raise SystemExit(f"--steps expects comma-separated step numbers, got {args.steps!r}") from e
+                raise SystemExit(f"--steps expects comma-separated step numbers, got {cfg.steps!r}") from e
         created = backend.add(payload)
         print(f"registered {created['id']} ({created['mode']}) — steps: {_fmt_steps(created['steps'])}")
-    elif action == "remove":
-        backend.remove(args.id)
-        print(f"removed {args.id}")
-    elif action == "convert":
-        backend.convert_start(args.id)
-        _eprint(f"converting {args.id} on the server (this exports ONNX per checkpoint — minutes, not seconds)")
+
+    def remove(
+        self,
+        id: str,
+        server: str | None = None,
+        local: bool = False,
+        device_map: bool = False,
+        dtype: DType = "float32",
+    ) -> None:
+        """Unregister a model.
+
+        Args:
+            id: registered model id.
+            server: probe server to drive (default: auto-detect http://localhost:8017, else run in-process).
+            local: run in-process even if a probe server is running.
+            device_map: in-process only: load with device_map='auto'.
+            dtype: in-process only: compute dtype (float32 matches the shards; lower halves memory).
+        """
+        cfg = ModelsIdCliConfig(id=id, server=server, local=local, device_map=device_map, dtype=dtype)
+        backend = choose_backend(cfg)
+        backend.remove(cfg.id)
+        print(f"removed {cfg.id}")
+
+    def convert(
+        self,
+        id: str,
+        server: str | None = None,
+        local: bool = False,
+        device_map: bool = False,
+        dtype: DType = "float32",
+    ) -> None:
+        """ONNX-convert a registered model for in-browser use.
+
+        Args:
+            id: registered model id.
+            server: probe server to drive (default: auto-detect http://localhost:8017, else run in-process).
+            local: run in-process even if a probe server is running.
+            device_map: in-process only: load with device_map='auto'.
+            dtype: in-process only: compute dtype (float32 matches the shards; lower halves memory).
+        """
+        cfg = ModelsIdCliConfig(id=id, server=server, local=local, device_map=device_map, dtype=dtype)
+        backend = choose_backend(cfg)
+        backend.convert_start(cfg.id)
+        _eprint(f"converting {cfg.id} on the server (this exports ONNX per checkpoint — minutes, not seconds)")
         last = ""
         while True:
             time.sleep(3)
-            status = backend.convert_status(args.id)
+            status = backend.convert_status(cfg.id)
             log = list(status.get("log") or [])
             if log and log[-1] != last:
                 last = log[-1]
@@ -362,79 +622,14 @@ def cmd_models(backend: Backend, args: argparse.Namespace) -> None:
                 break
         if status["status"] != "done":
             raise SystemExit("conversion failed:\n  " + "\n  ".join(log))
-        print(f"converted {args.id}" + (f" — {status['note']}" if status.get("note") else ""))
+        print(f"converted {cfg.id}" + (f" — {status['note']}" if status.get("note") else ""))
 
 
-def main() -> None:
-    conn = argparse.ArgumentParser(add_help=False)
-    conn.add_argument(
-        "--server",
-        metavar="URL",
-        default=None,
-        help=f"probe server to drive (default: auto-detect {DEFAULT_SERVER}, else run in-process)",
-    )
-    conn.add_argument("--local", action="store_true", help="run in-process even if a probe server is running")
-    conn.add_argument("--device-map", action="store_true", help="in-process only: load with device_map='auto'")
-    conn.add_argument(
-        "--dtype",
-        choices=DTYPE_CHOICES,
-        default="float32",
-        help="in-process only: compute dtype (float32 matches the shards; lower halves memory)",
-    )
-
-    ap = argparse.ArgumentParser(
-        prog="lenslapse", description="Terminal access to everything the web app's UI can do."
-    )
-    sub = ap.add_subparsers(dest="cmd", required=True)
-
-    pp = sub.add_parser("probe", parents=[conn], help='one logit-lens pass — the UI\'s "Live probe" button')
-    pp.add_argument("--model", required=True, help="registered model id (see `lenslapse models`)")
-    pp.add_argument("--text", required=True)
-    pp.add_argument("--step", type=int, default=None, help="checkpoint step (default: the model's last)")
-    pp.add_argument("--pos", type=int, default=None, help="token position to print (default: last)")
-    pp.add_argument("--targets", default=None, help="comma-separated token ids to track exactly")
-    pp.add_argument("--json", action="store_true", help="print the full probe payload (what the web app receives)")
-
-    pt = sub.add_parser(
-        "trace", parents=[conn], help='probe every checkpoint — the UI\'s "trace across training" button'
-    )
-    pt.add_argument("--model", required=True, help="registered model id (see `lenslapse models`)")
-    pt.add_argument("--text", required=True)
-    pt.add_argument("--pos", type=int, default=None, help="token position to trace (default: last)")
-    pt.add_argument("--layer", type=int, default=None, help="layer whose probability the table shows (default: final)")
-    pt.add_argument("--top", type=int, default=3, help="how many final-checkpoint top tokens to track (default: 3)")
-    pt.add_argument("--targets", default=None, help="track these token ids instead of the final-checkpoint top-k")
-    pt.add_argument("--json", action="store_true", help="print the whole trajectory as JSON (table goes away)")
-
-    pm = sub.add_parser("models", help='list/add/remove/convert models — the UI\'s "models" dialog')
-    pm.set_defaults(action=None, server=None, local=False, device_map=False, dtype="float32")
-    msub = pm.add_subparsers(dest="action")
-    msub.add_parser("list", parents=[conn], help="show every registered model")
-    ma = msub.add_parser("add", parents=[conn], help="register a model (HF id or a folder on the server machine)")
-    ma.add_argument("--ref", required=True, help="HF id or local checkpoint directory")
-    ma.add_argument("--id", required=True, help="id the app shows in its model picker")
-    ma.add_argument("--label", default=None)
-    ma.add_argument(
-        "--mode",
-        choices=MODE_CHOICES,
-        default=None,
-        help="default: local if --ref is a directory, suite if --steps is given, else final",
-    )
-    ma.add_argument("--steps", default=None, help="suite only: comma-separated step numbers")
-    mr = msub.add_parser("remove", parents=[conn], help="unregister a model")
-    mr.add_argument("id")
-    mc = msub.add_parser("convert", parents=[conn], help="ONNX-convert a registered model for in-browser use")
-    mc.add_argument("id")
-
-    args = ap.parse_args()
-    backend = choose_backend(args)
-    if args.cmd == "probe":
-        cmd_probe(backend, args)
-    elif args.cmd == "trace":
-        cmd_trace(backend, args)
-    else:
-        cmd_models(backend, args)
+# lenslapse probe/trace/models — dispatched individually by cli.py (`fire.Fire(COMMANDS[cmd], ...)`)
+# and, when this module runs standalone, all together via `fire.Fire(COMMANDS)` below.
+COMMANDS: dict[str, Any] = {"probe": probe, "trace": trace, "models": ModelsCommands()}
 
 
 if __name__ == "__main__":
-    main()
+    configure_cli_logging()
+    fire.Fire(COMMANDS)
