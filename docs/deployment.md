@@ -58,5 +58,9 @@ that the live-probe path and the free-text tokenizer feature need locally.
 - [ ] Live probe on a free-text prompt downloads one checkpoint (~29MB for 14M, ~142MB for 70M,
       ~326MB for 160M, ~327MB for GPT-2, once per checkpoint) and completes; badge shows WebGPU
       or WASM.
+- [ ] Without a probe server connected, free-text live probe works for nine of the eleven models;
+      MAP-Neo and Aquila fall back to "precomputed mode only" (their tokenizers are custom Python
+      code with no browser-compatible `tokenizer.json` — see `docs/model-card.md`'s Reproduce
+      section) — connect a probe server to live-probe those two with free text.
 - [ ] `?ep=wasm` forces the WASM path (for browsers without WebGPU).
 - [ ] DevTools Network tab shows requests only to the site origin and `huggingface.co`/its CDN.

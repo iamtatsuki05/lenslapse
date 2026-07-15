@@ -150,6 +150,13 @@ combined English + Chinese curated-prompt set used for MAP-Neo, Aquila, and BLOO
 architecture-coverage examples Qwen3 and Gemma 3 — five multilingual-capable models in total, in
 place of the English-only default used by the other six) for the exact commands.
 
+Because MAP-Neo and Aquila's tokenizers rely on custom Python code (`tokenization_neo.py` /
+`tokenization_qwen.py`) with no fast-tokenizer (`tokenizer.json`) equivalent, the deployed web
+app's free-text live probe for these two specifically requires a connected probe server —
+`transformers.js` cannot execute that code client-side. Curated prompts for both are unaffected
+(served precomputed, no client-side tokenization needed); see `deployment.md`'s verification
+checklist.
+
 ## License and attribution
 
 **⚠️ Three directories here are not plain Apache-2.0/MIT — read this section before redistributing
