@@ -3,7 +3,7 @@
 **A fully in-browser time-lapse for the logit lens: scrub across Pythia's public training checkpoints and watch next-token predictions crystallize from noise into knowledge — layer by layer, with zero backend.**
 
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
-- **Seven shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, GPT-2 124M (final checkpoint), and three multilingual suites unchanged by the same recipe: MAP-Neo-250M and BAAI Aquila-135M (Chinese/English, Hub-subfolder checkpoints), and BLOOM-560M (46 languages, `global_step{N}` revisions) — switchable in the header. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, and Mistral-style RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`).
+- **Eleven shipped models** — Pythia 14M / 70M / 160M across 20 training checkpoints each, GPT-2 124M (final checkpoint), three multilingual suites unchanged by the same recipe (MAP-Neo-250M and BAAI Aquila-135M — Chinese/English, Hub-subfolder checkpoints — and BLOOM-560M — 46 languages, `global_step{N}` revisions), and four more architecture-coverage examples (SmolLM2-135M, Qwen3-0.6B, OPT-125M, Gemma-3-270M) — switchable in the header. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, Mistral-style RMSNorm, and Gemma-style plus-one-weight RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`). `opt-125m` and `gemma3-270m` carry non-Apache-2.0/MIT licenses — see `docs/model-card.md` before redistributing or deploying them.
 - **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3× pixel density) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
 - Free-text prompts run **live in your browser**: per-checkpoint ONNX pairs (fp16 weights, fp32 compute) are fetched once, cached, and probed with a single forward pass — your prompt never leaves your device.
@@ -198,5 +198,9 @@ execution providers (WebGPU/WASM), emulated CPU throttling, model sizes, and pro
 MIT. Pythia checkpoints are © EleutherAI, Apache-2.0; GPT-2 weights are © OpenAI, MIT (Modified);
 MAP-Neo and BAAI Aquila checkpoints are Apache-2.0. **BLOOM checkpoints are © BigScience Workshop,
 licensed under the BigScience RAIL License v1.0** — not a plain permissive license like the others
-here; it attaches use-based behavioral restrictions to downstream recipients. See
-`docs/model-card.md` for the full attribution and license text for every suite.
+here; it attaches use-based behavioral restrictions to downstream recipients. **`opt-125m` (Meta's
+OPT-175B License Agreement) is non-commercial-research-only — no commercial use is permitted at
+all.** **`gemma3-270m` (Google's Gemma Terms of Use) permits commercial use but requires passing its
+Prohibited Use Policy on to downstream recipients and remains subject to Google's unilateral right
+to restrict or terminate use.** See `docs/model-card.md` for the full attribution and license text
+for every model.

@@ -87,8 +87,9 @@
             <p>
               <code>pip install</code> then <code>lenslapse server</code> serves the app and the probe API on one
               local port. Point it at any HF model or a local Trainer run — no ONNX conversion, no config files. The
-              recipe is architecture-generic: GPT-NeoX, GPT-2, Llama-style, and Mistral-style RMSNorm models all pass
-              the parity check — shipped for MAP-Neo, Aquila, and BLOOM alongside Pythia and GPT-2.
+              recipe is architecture-generic: GPT-NeoX, GPT-2, Llama-style, Mistral-style, and Gemma-style
+              (plus-one-weight) RMSNorm models all pass the parity check — shipped for MAP-Neo, Aquila, BLOOM,
+              SmolLM2, Qwen3, OPT, and Gemma 3 alongside Pythia and GPT-2.
             </p>
           </div>
           <div class="card">
@@ -195,10 +196,12 @@ browser (static site, no backend)
 
       <footer>
         <p>
-          Code released under the MIT License. Pythia, GPT-2, MAP-Neo, and Aquila checkpoints are Apache-2.0/MIT;
-          BLOOM checkpoints are © BigScience Workshop under the BigScience RAIL License v1.0, which attaches
-          use-based restrictions unlike every other suite here — see the
-          <a href="https://huggingface.co/iamtatsuki05/lenslapse-onnx" target="_blank" rel="noopener">model card</a>.
+          Code released under the MIT License. Pythia, GPT-2, MAP-Neo, Aquila, SmolLM2, and Qwen3 checkpoints are
+          Apache-2.0/MIT. BLOOM (BigScience RAIL License v1.0) and Gemma 3 (Gemma Terms of Use) permit broad,
+          including commercial, use subject to behavioral restrictions; OPT (Meta's OPT-175B License Agreement)
+          permits non-commercial research use only — see the
+          <a href="https://huggingface.co/iamtatsuki05/lenslapse-onnx" target="_blank" rel="noopener">model card</a>
+          before redistributing or deploying any of the three.
         </p>
         <p>
           <a href="../">Live Demo</a> · <a href="https://github.com/iamtatsuki05/lenslapse">GitHub</a>

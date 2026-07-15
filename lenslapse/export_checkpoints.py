@@ -67,6 +67,25 @@ class Backbone(torch.nn.Module):
         return torch.stack([out.hidden_states[0], *captured], dim=0)
 
 
+def _rmsnorm_weight_has_implicit_plus_one(norm: torch.nn.Module, hidden_size: int) -> bool:
+    """Most RMSNorm variants compute normalized(x) * weight, but some (Gemma 2/3) compute
+    normalized(x) * (1 + weight) instead -- Gemma initializes the weight near zero rather than
+    near one for training stability and adds the 1 back at call time (see Gemma3RMSNorm.forward
+    and https://github.com/huggingface/transformers/pull/29402). The class name alone does not
+    signal this, so probe the real module directly: run it on a fixed random vector and check
+    which reconstruction (with or without +1) it actually matches, using the same eps convention
+    read elsewhere in this module."""
+    with torch.no_grad():
+        probe = torch.randn(1, 1, hidden_size, generator=torch.Generator().manual_seed(0))
+        real = norm(probe).double()
+        eps = getattr(norm, "eps", None) or getattr(norm, "variance_epsilon", 1e-5)
+        normed = (probe.double() * torch.rsqrt(probe.double().pow(2).mean(-1, keepdim=True) + eps)).float().double()
+        w = norm.weight.detach().double()
+        vanilla_diff = (real - normed * w).abs().max()
+        plus_one_diff = (real - normed * (1 + w)).abs().max()
+        return bool(plus_one_diff < vanilla_diff)
+
+
 def build_lens_onnx(model: AutoModelForCausalLM, path: Path) -> None:
     """Lens head = final norm (LayerNorm or RMSNorm, composed from primitive ops) + unembedding."""
     handles = resolve(model)
@@ -82,16 +101,25 @@ def build_lens_onnx(model: AutoModelForCausalLM, path: Path) -> None:
                 "LayerNormalization", ["hidden", "norm_w", "norm_b"], ["normed"], axis=-1, epsilon=handles.eps
             ),
         ]
-    else:  # rmsnorm: x * rsqrt(mean(x^2) + eps) * w
+    else:  # rmsnorm: x * rsqrt(mean(x^2) + eps) * w  (or * (1 + w) -- see the helper above)
         inits.append(numpy_helper.from_array(np.array([-1], dtype=np.int64), "axes"))
         inits.append(numpy_helper.from_array(np.array(handles.eps, dtype=np.float32), "eps"))
+        scale_nodes = (
+            [
+                helper.make_node("Constant", [], ["one"], value=numpy_helper.from_array(np.array(1.0, np.float32))),
+                helper.make_node("Add", ["one", "norm_w"], ["norm_w_scaled"]),
+            ]
+            if _rmsnorm_weight_has_implicit_plus_one(norm, h)
+            else []
+        )
         nodes = [
             helper.make_node("Mul", ["hidden", "hidden"], ["sq"]),
             helper.make_node("ReduceMean", ["sq", "axes"], ["ms"], keepdims=1),
             helper.make_node("Add", ["ms", "eps"], ["ms_eps"]),
             helper.make_node("Sqrt", ["ms_eps"], ["rms"]),
             helper.make_node("Div", ["hidden", "rms"], ["xn"]),
-            helper.make_node("Mul", ["xn", "norm_w"], ["normed"]),
+            *scale_nodes,
+            helper.make_node("Mul", ["xn", "norm_w_scaled" if scale_nodes else "norm_w"], ["normed"]),
         ]
     head_bias = getattr(handles.lm_head, "bias", None)
     if head_bias is not None:

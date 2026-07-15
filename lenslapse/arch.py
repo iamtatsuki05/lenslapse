@@ -1,10 +1,11 @@
 """Architecture introspection: locate the pieces the lens recipe needs on any HF decoder LM.
 
 Supports the common decoder layouts:
-  GPT-NeoX / Pythia : model.gpt_neox.layers,  final_layer_norm (LayerNorm),  embed_out
+  GPT-NeoX / Pythia : model.gpt_neox.layers,         final_layer_norm (LayerNorm),  embed_out
   Llama / OLMo-2 /
-  SmolLM / Qwen     : model.model.layers,     model.model.norm (RMSNorm),    lm_head
-  GPT-2             : model.transformer.h,    transformer.ln_f (LayerNorm),  lm_head (tied)
+  SmolLM / Qwen     : model.model.layers,            model.model.norm (RMSNorm),    lm_head
+  GPT-2             : model.transformer.h,           transformer.ln_f (LayerNorm),  lm_head (tied)
+  OPT               : model.model.decoder.layers,    decoder.final_layer_norm (LayerNorm), lm_head
 
 The lens identity — lens(last block output) == model logits — holds for pre-LN decoders where the
 LM applies `final_norm` then `lm_head` to the last block's output. export_checkpoints.py asserts it
@@ -26,16 +27,27 @@ class ArchHandles:
     eps: float
 
 
-_BASE_PATHS = ("gpt_neox", "model", "transformer")
+# "model.decoder" before "model": OPT nests its decoder stack two hops down (model.model.decoder),
+# so the plain one-hop "model" (-> OPTModel, which has neither layers nor a final norm of its own)
+# must not win first.
+_BASE_PATHS = ("gpt_neox", "model.decoder", "model", "transformer")
 _LAYER_ATTRS = ("layers", "h")
 _NORM_ATTRS = ("final_layer_norm", "norm", "ln_f")
 
 
+def _resolve_path(obj: torch.nn.Module, dotted_path: str) -> torch.nn.Module | None:
+    for name in dotted_path.split("."):
+        obj = getattr(obj, name, None)
+        if obj is None:
+            return None
+    return obj if isinstance(obj, torch.nn.Module) else None
+
+
 def resolve(model: torch.nn.Module) -> ArchHandles:
     base = None
-    for name in _BASE_PATHS:
-        cand = getattr(model, name, None)
-        if isinstance(cand, torch.nn.Module):
+    for path in _BASE_PATHS:
+        cand = _resolve_path(model, path)
+        if cand is not None:
             base = cand
             break
     if base is None:

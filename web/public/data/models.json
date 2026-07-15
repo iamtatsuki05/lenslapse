@@ -53,6 +53,34 @@
         500000,
         600000
       ]
+    },
+    {
+      "id": "smollm2-135m",
+      "hf": "smollm2-135m",
+      "label": "SmolLM2 135M",
+      "mode": "final",
+      "source": "HuggingFaceTB/SmolLM2-135M"
+    },
+    {
+      "id": "qwen3-0.6b",
+      "hf": "qwen3-0.6b",
+      "label": "Qwen3 0.6B",
+      "mode": "final",
+      "source": "Qwen/Qwen3-0.6B"
+    },
+    {
+      "id": "opt-125m",
+      "hf": "opt-125m",
+      "label": "OPT 125M",
+      "mode": "final",
+      "source": "facebook/opt-125m"
+    },
+    {
+      "id": "gemma3-270m",
+      "hf": "gemma3-270m",
+      "label": "Gemma 3 270M",
+      "mode": "final",
+      "source": "google/gemma-3-270m"
     }
   ]
 }
