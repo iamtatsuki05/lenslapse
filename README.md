@@ -36,7 +36,7 @@ Switchable in the header, each labeled by its documented language support ("Mult
 ## Quick start: probe your own models (no checkout needed)
 
 ```bash
-pip install "git+https://github.com/iamtatsuki05/lenslapse.git"
+pip install lenslapse
 lenslapse server        # serves the web app AND the probe API on one local port, then opens it
 ```
 

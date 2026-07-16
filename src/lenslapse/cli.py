@@ -2,7 +2,7 @@
 
 Designed for people who just want to point the hosted web app at their own models:
 
-    pip install "git+https://github.com/iamtatsuki05/lenslapse.git"
+    pip install lenslapse
     lenslapse server        # starts the probe server and opens the app in the browser
 
 Subcommands delegate to the underlying modules, so every flag they document works here too
