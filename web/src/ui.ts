@@ -109,7 +109,7 @@ export interface StoryCard {
   step: number
 }
 
-/** Curated example prompts (mirrors PROMPTS in lenslapse/precompute_lens.py) — offered as
+/** Curated example prompts (mirrors PROMPTS in src/lenslapse/precompute_lens.py) — offered as
  * live-probe suggestions for models that ship no precomputed shards. */
 export const EXAMPLE_TEXTS = [
   'The capital of Japan is the city of',
