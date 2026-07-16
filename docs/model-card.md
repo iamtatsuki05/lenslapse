@@ -21,6 +21,8 @@ tags:
 
 # LensLapse ONNX checkpoints — Pythia suite across training, plus single-checkpoint architecture coverage
 
+![The LensLapse interface: logit-lens grid, training-step slider, and trajectory panel for "The capital of Japan is the city of," at step 8,000 — these are the checkpoints that power it.](https://raw.githubusercontent.com/iamtatsuki05/lenslapse/main/docs/assets/readme-hero.png)
+
 Browser-runnable ONNX conversions of 20 log-spaced **training checkpoints** each of
 [EleutherAI/pythia-14m](https://huggingface.co/EleutherAI/pythia-14m),
 [pythia-70m](https://huggingface.co/EleutherAI/pythia-70m), and
