@@ -29,7 +29,7 @@ dependencies = [
     # there for DeepSeek's ByteLevel BPE); for sarashina-style unigram SentencePiece models it
     # manifests as single-character tokenization. >=4.57: the `dtype=` kwarg this package uses is
     # silently dropped before 4.56, and 4.57 is the verified series.
-    "transformers>=4.57,<5",
+    "transformers>=4.57,<6",
     # Llama-family tokenizers with legacy=False load through sentencepiece + protobuf in v4
     "sentencepiece>=0.2",
     "protobuf>=4.0",
