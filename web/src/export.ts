@@ -2,7 +2,7 @@
 // permalink footer) into a publication-friendly image and saves it as PNG or PDF.
 // Rendering is forced to a light theme on a white background at 3x resolution.
 
-import { displayToken } from './grid'
+import { clipText, displayToken, layerLabel } from './grid'
 import type { LensGrid, PinnedCell } from './grid'
 
 export interface FigureMeta {
@@ -95,7 +95,7 @@ export async function composeFigure({ grid, trajSvg, meta }: ExportView) {
   )
   ctx.font = '13px Helvetica, Arial, sans-serif'
   ctx.fillStyle = '#4a4d57'
-  const promptLine = `“${meta.prompt}”${meta.pinned ? `   (pinned: ${meta.pinned.layer === 0 ? 'embedding' : `layer ${meta.pinned.layer}`}, position ${meta.pinned.pos})` : ''}`
+  const promptLine = `“${meta.prompt}”${meta.pinned ? `   (pinned: ${layerLabel(meta.pinned.layer)}, position ${meta.pinned.pos})` : ''}`
   ctx.fillText(clipText(ctx, promptLine, contentW), PAD, PAD + 28)
 
   // lens grid
@@ -118,13 +118,6 @@ export async function composeFigure({ grid, trajSvg, meta }: ExportView) {
   ctx.textAlign = 'left'
 
   return { canvas, w: W, h: H }
-}
-
-function clipText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
-  if (ctx.measureText(text).width <= maxW) return text
-  let t = text
-  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1)
-  return `${t}…`
 }
 
 function figureBasename(meta: FigureMeta): string {

@@ -383,17 +383,21 @@ def test_probe_cache_key_distinguishes_subfolder_checkpoints() -> None:
     assert probe_cache_key(a, req) != probe_cache_key(b, req)
 
 
+class StubModel:
+    """A weightless stand-in for the two load() tests below — enough surface for load()'s
+    .to(device).eval() chain."""
+
+    def to(self, device: str) -> "StubModel":
+        return self
+
+    def eval(self) -> "StubModel":
+        return self
+
+
 def test_load_defaults_to_float32_compute(monkeypatch: pytest.MonkeyPatch) -> None:
     from lenslapse.sources import CheckpointSource
 
     seen: dict[str, Any] = {}
-
-    class StubModel:
-        def to(self, device: str) -> "StubModel":
-            return self
-
-        def eval(self) -> "StubModel":
-            return self
 
     class StubAuto:
         @staticmethod
@@ -416,13 +420,6 @@ def test_load_distinguishes_subfolder_checkpoints(monkeypatch: pytest.MonkeyPatc
     from lenslapse.sources import CheckpointSource
 
     loaded_subfolders: list[str] = []
-
-    class StubModel:
-        def to(self, device: str) -> "StubModel":
-            return self
-
-        def eval(self) -> "StubModel":
-            return self
 
     class StubAuto:
         @staticmethod

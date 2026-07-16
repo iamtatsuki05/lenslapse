@@ -184,7 +184,7 @@ export class LensGrid {
     // header: input tokens
     ctx.fillStyle = dark ? '#9a9daa' : '#6b6e78'
     for (let t = 0; t < grid.positions; t++) {
-      const label = clip(ctx, displayToken(this.tokens[t] ?? ''), CELL_W - 10)
+      const label = clipText(ctx, displayToken(this.tokens[t] ?? ''), CELL_W - 10)
       ctx.fillText(label, LABEL_W + t * CELL_W + 5, HEADER_H / 2)
     }
 
@@ -201,7 +201,7 @@ export class LensGrid {
         ctx.fillStyle = cssColor(rgb)
         ctx.fillRect(x + 1, y + 1, CELL_W - 2, CELL_H - 2)
         ctx.fillStyle = textColorOn(rgb)
-        ctx.fillText(clip(ctx, displayToken(cell.token), CELL_W - 10), x + 5, y + CELL_H / 2)
+        ctx.fillText(clipText(ctx, displayToken(cell.token), CELL_W - 10), x + 5, y + CELL_H / 2)
         if (this.pinned && this.pinned.layer === layer && this.pinned.pos === t) {
           ctx.strokeStyle = dark ? '#ff8b8b' : '#d4494a'
           ctx.lineWidth = 2.5
@@ -222,7 +222,14 @@ export function displayToken(tok: string): string {
     .replace(/Ċ/g, '⏎')
 }
 
-function clip(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+/** The long-form row name used in prose (tooltips, panel subtitles, figure captions) —
+ * the in-grid row labels keep their own terse 'emb'/'L{n}' form. */
+export function layerLabel(layer: number): string {
+  return layer === 0 ? 'embedding' : `layer ${layer}`
+}
+
+/** Truncate `text` with a trailing ellipsis so it fits `maxW` px in `ctx`'s current font. */
+export function clipText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
   if (ctx.measureText(text).width <= maxW) return text
   let t = text
   while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1)

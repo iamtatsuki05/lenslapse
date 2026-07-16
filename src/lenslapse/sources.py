@@ -31,6 +31,11 @@ MODE_CHOICES: tuple[Mode, ...] = ("suite", "final", "local")
 DType = Literal["float32", "float16", "bfloat16", "auto"]
 DTYPE_CHOICES: tuple[DType, ...] = ("float32", "float16", "bfloat16", "auto")
 
+# The Pythia suite's public checkpoint grid — the default for every CLI's --steps and the
+# server's suite mode. One definition: the CLIs, their Config models, and DEFAULT_SUITE_STEPS
+# in server.py must all agree or exported/precomputed/served checkpoint sets silently diverge.
+DEFAULT_STEPS_CSV = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
+
 
 def coerce_fire_csv_arg(v: object) -> object:
     """fire always tries to parse a bare CLI value as a Python literal before falling back to
@@ -101,6 +106,21 @@ def resolve_subfolder_sources(model: str, subfolder_map: str) -> list[Checkpoint
         step_s, sub = pair.split(":", 1)
         by_step[int(step_s)] = sub
     return [CheckpointSource(model, None, step, subfolder=sub) for step, sub in sorted(by_step.items())]
+
+
+def resolve_all_sources(
+    model: str,
+    steps: str,
+    final_only: bool = False,
+    subfolder_map: str | None = None,
+    revision_template: str = "step{}",
+) -> list[CheckpointSource]:
+    """The one precedence rule every CLI shares: a --subfolder-map fully replaces the
+    steps/final-only/revision-template resolution (shape 4 repos label checkpoints by
+    subfolder, not by git revision)."""
+    if subfolder_map:
+        return resolve_subfolder_sources(model, subfolder_map)
+    return resolve_sources(model, steps, final_only, revision_template)
 
 
 def resolve_tokenizer_ref(tokenizer_ref: str | None, fallback: CheckpointSource) -> tuple[str, str | None, str]:

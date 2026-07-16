@@ -44,6 +44,9 @@ export interface ProbeResult {
   tgt?: Record<string, { token: string; p: number[][]; r: number[][] }>
 }
 
+/** Where `lenslapse server` listens by default — also the origin shown in copyable snippets. */
+export const DEFAULT_PROBE_ORIGIN = 'http://localhost:8017'
+
 // Optional local probe server for models too heavy for the browser.
 // ?probe=<url> connects and is remembered (localStorage) so later visits need no parameter;
 // ?probe=off forgets it. A locally-served app additionally auto-detects its own origin (the
@@ -86,7 +89,7 @@ export function resolveProbeCandidates(): { candidates: string[]; explicit: bool
     /* storage unavailable */
   }
   if (['localhost', '127.0.0.1'].includes(location.hostname)) {
-    return { candidates: [...new Set([location.origin, 'http://localhost:8017'])], explicit: false }
+    return { candidates: [...new Set([location.origin, DEFAULT_PROBE_ORIGIN])], explicit: false }
   }
   return { candidates: [], explicit: false }
 }

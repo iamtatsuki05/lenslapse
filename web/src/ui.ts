@@ -1,12 +1,13 @@
 // Small UI helpers: tooltip, slider ticks, badges, gallery cards.
 
-import { displayToken } from './grid'
+import { logStepFrac } from './data'
+import { displayToken, layerLabel } from './grid'
 import type { CellInfo } from './grid'
 import type { Prompt } from './data'
 
 /** The head line every tooltip variant shares: which layer, after which token. */
 function tooltipHead(layer: number, token: string): string {
-  return `<div class="tt-head">${layer === 0 ? 'embedding' : `layer ${layer}`} · after “${escapeHtml(displayToken(token))}”</div>`
+  return `<div class="tt-head">${layerLabel(layer)} · after “${escapeHtml(displayToken(token))}”</div>`
 }
 
 /** Place a tooltip at the pointer, clamped to stay fully inside the viewport. Must run after
@@ -77,14 +78,12 @@ export function showAcqTooltip(
 export function buildSliderTicks(container: HTMLElement, steps: number[], liveSteps: number[], maxStep: number): void {
   container.replaceChildren()
   const live = new Set(liveSteps)
-  // floor at log10(2): a single-checkpoint model registered on the probe server has steps=[0],
-  // where log10(0+1)=0 would divide by zero and emit left:"NaN%" (same family as the trajectory
-  // chart's step-0 fix); the lone tick then sits at the left edge, its true position
-  const xmax = Math.max(Math.log10(maxStep + 1), Math.log10(2))
   for (const s of steps) {
     const t = document.createElement('div')
     t.className = live.has(s) ? 'tick live' : 'tick'
-    t.style.left = `${(Math.log10(s + 1) / xmax) * 100}%`
+    // logStepFrac's step-0 guard matters here too: a single-checkpoint model registered on the
+    // probe server has steps=[0], which would otherwise emit left:"NaN%"
+    t.style.left = `${logStepFrac(s, maxStep) * 100}%`
     t.title = `step ${s.toLocaleString()}${live.has(s) ? ' (live-capable)' : ''}`
     container.appendChild(t)
   }

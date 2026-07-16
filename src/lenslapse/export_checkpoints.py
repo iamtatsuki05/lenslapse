@@ -36,11 +36,11 @@ from lenslapse.arch import resolve
 from lenslapse.logging_utils import configure_cli_logging
 from lenslapse.onnx_f16 import save_f16
 from lenslapse.sources import (
+    DEFAULT_STEPS_CSV,
     CheckpointSource,
     coerce_fire_csv_arg,
     load_tokenizer,
-    resolve_sources,
-    resolve_subfolder_sources,
+    resolve_all_sources,
     resolve_tokenizer_ref,
     token_display_text,
 )
@@ -148,6 +148,24 @@ def build_lens_onnx(model: AutoModelForCausalLM, path: Path) -> None:
     onnx.save(helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)]), str(path))
 
 
+def export_backbone_onnx(bb: "Backbone", input_ids: "torch.Tensor", attn: "torch.Tensor", path: Path) -> None:
+    """The one torch.onnx.export call for a backbone — fidelity_eval.py and check_arch_parity.py
+    must export with exactly these axes/opset or their diagnostics stop matching production."""
+    torch.onnx.export(
+        bb,
+        (input_ids, attn),
+        str(path),
+        input_names=["input_ids", "attention_mask"],
+        output_names=["hidden_states"],
+        dynamic_axes={
+            "input_ids": {0: "b", 1: "t"},
+            "attention_mask": {0: "b", 1: "t"},
+            "hidden_states": {1: "b", 2: "t"},
+        },
+        opset_version=18,
+    )
+
+
 def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str, Any]:
     rev = src.name
     model = AutoModelForCausalLM.from_pretrained(
@@ -167,19 +185,7 @@ def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str,
     with tempfile.TemporaryDirectory() as td:
         bb_fp32 = Path(td) / "backbone.onnx"
         lens_fp32 = Path(td) / "lens.onnx"
-        torch.onnx.export(
-            bb,
-            (input_ids, attn),
-            str(bb_fp32),
-            input_names=["input_ids", "attention_mask"],
-            output_names=["hidden_states"],
-            dynamic_axes={
-                "input_ids": {0: "b", 1: "t"},
-                "attention_mask": {0: "b", 1: "t"},
-                "hidden_states": {1: "b", 2: "t"},
-            },
-            opset_version=18,
-        )
+        export_backbone_onnx(bb, input_ids, attn, bb_fp32)
         build_lens_onnx(model, lens_fp32)
 
         # fp32 parity: lens(hidden[-1]) must match torch logits. Late checkpoints have large logit
@@ -253,7 +259,7 @@ class ExportConfig(BaseModel):
     """Validated arguments for `export_checkpoints`; see `main`'s docstring for what each means."""
 
     model: str = "EleutherAI/pythia-70m"
-    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
+    steps: str = DEFAULT_STEPS_CSV
     out: Path
     skip_existing: bool = False
     final_only: bool = False
@@ -267,7 +273,7 @@ class ExportConfig(BaseModel):
 def main(
     out: str,
     model: str = "EleutherAI/pythia-70m",
-    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000",
+    steps: str = DEFAULT_STEPS_CSV,
     skip_existing: bool = False,
     final_only: bool = False,
     subfolder_map: str | None = None,
@@ -305,11 +311,7 @@ def main(
     )
 
     cfg.out.mkdir(parents=True, exist_ok=True)
-    sources = (
-        resolve_subfolder_sources(cfg.model, cfg.subfolder_map)
-        if cfg.subfolder_map
-        else resolve_sources(cfg.model, cfg.steps, cfg.final_only, cfg.revision_template)
-    )
+    sources = resolve_all_sources(cfg.model, cfg.steps, cfg.final_only, cfg.subfolder_map, cfg.revision_template)
     tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(cfg.tokenizer_ref, sources[0])
     tok = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
 

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lenslapse.arch import resolve
-from lenslapse.export_checkpoints import PROBE, Backbone, build_lens_onnx
+from lenslapse.export_checkpoints import PROBE, Backbone, build_lens_onnx, export_backbone_onnx
 from lenslapse.logging_utils import configure_cli_logging
 from lenslapse.onnx_f16 import save_f16
 
@@ -64,19 +64,7 @@ def main(model: str, revision: str = "main") -> None:
 
     with tempfile.TemporaryDirectory() as td:
         bb, lens = Path(td) / "bb.onnx", Path(td) / "lens.onnx"
-        torch.onnx.export(
-            Backbone(model_obj),
-            (input_ids, attn),
-            str(bb),
-            input_names=["input_ids", "attention_mask"],
-            output_names=["hidden_states"],
-            dynamic_axes={
-                "input_ids": {0: "b", 1: "t"},
-                "attention_mask": {0: "b", 1: "t"},
-                "hidden_states": {1: "b", 2: "t"},
-            },
-            opset_version=18,
-        )
+        export_backbone_onnx(Backbone(model_obj), input_ids, attn, bb)
         build_lens_onnx(model_obj, lens)
         sb, sl = ort.InferenceSession(str(bb)), ort.InferenceSession(str(lens))
         h = sb.run(None, {"input_ids": input_ids.numpy(), "attention_mask": attn.numpy()})[0]
