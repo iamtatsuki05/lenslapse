@@ -389,6 +389,9 @@ export class LiveEngine {
   async probeOnnx(text: string, step: number, onStatus?: StatusFn, targets?: number[]): Promise<ProbeResult> {
     const t0 = performance.now()
     const { backbone, lens } = await this.loadCheckpoint(step, onStatus)
+    // tokenizer default (special tokens INCLUDED): the grid convention, deliberately the
+    // opposite of tokenize() above — precomputed shards and the probe server tokenize the same
+    // way, so a BOS-prepending model (gemma3) keeps its positions aligned across all three paths
     const enc = this.tokenizer!(text)
     const ids = enc.input_ids.data as BigInt64Array // BigInt64Array
     const T = ids.length
@@ -409,16 +412,25 @@ export class LiveEngine {
 
     const tokens = Array.from(ids, (id) => this.tokenizer!.decode([Number(id)]))
     const cells: GridCell[][] = []
+    // cache each cell's softmax normalizers from topkSoftmax so the target loop below reuses them
+    // instead of recomputing max+Z per (target, cell) — only allocated when targets are requested
+    const norm: { max: number; Z: number }[][] | null = targets?.length ? [] : null
     for (let li = 0; li < L1; li++) {
       const row: GridCell[] = []
+      const normRow: { max: number; Z: number }[] | null = norm ? [] : null
       for (let t = 0; t < T; t++) {
         const off = (li * T + t) * V
-        row.push(topkSoftmax(logits.data as Float32Array, off, V, 10, (id) => this.tokenizer!.decode([id])))
+        // strip max/Z off the stored cell: grids are persisted to the IndexedDB probe cache, and
+        // the cached shape must stay identical to the server backend's cells
+        const { max, Z, ...cell } = topkSoftmax(logits.data as Float32Array, off, V, 10, (id) => this.tokenizer!.decode([id]))
+        row.push(cell)
+        normRow?.push({ max, Z })
       }
       cells.push(row)
+      if (normRow) norm!.push(normRow)
     }
     let tgt: ProbeResult['tgt']
-    if (targets?.length) {
+    if (targets?.length && norm) {
       tgt = {}
       for (const tid of [...new Set(targets)].sort((a, b) => a - b)) {
         const pRows: number[][] = []
@@ -428,7 +440,7 @@ export class LiveEngine {
           const rRow: number[] = []
           for (let t = 0; t < T; t++) {
             const off = (li * T + t) * V
-            const { p, r } = targetStat(logits.data as Float32Array, off, V, tid)
+            const { p, r } = targetStat(logits.data as Float32Array, off, V, tid, norm[li][t].max, norm[li][t].Z)
             pRow.push(p)
             rRow.push(r)
           }
@@ -450,27 +462,27 @@ export class LiveEngine {
   }
 }
 
-/** Exact softmax probability and rank of one token id in a cell's logit row. */
-export function targetStat(data: Float32Array, off: number, V: number, tid: number): { p: number; r: number } {
-  let max = -Infinity
-  for (let i = 0; i < V; i++) if (data[off + i] > max) max = data[off + i]
-  let Z = 0
+/** Exact softmax probability and rank of one token id in a cell's logit row. `max` and `Z` are
+ * the row's softmax normalizers, already computed by topkSoftmax for the same cell — reusing them
+ * turns this into a single rank-comparison pass (with one exp for the probability), instead of a
+ * redundant second full-vocab max+Z recomputation per target. The rank loop keeps the i=0..V order
+ * and the p formula unchanged, so results are byte-identical to the standalone computation. */
+export function targetStat(data: Float32Array, off: number, V: number, tid: number, max: number, Z: number): { p: number; r: number } {
   let rank = 1
   const v = data[off + tid]
-  for (let i = 0; i < V; i++) {
-    Z += Math.exp(data[off + i] - max)
-    if (data[off + i] > v) rank++
-  }
+  for (let i = 0; i < V; i++) if (data[off + i] > v) rank++
   return { p: Math.round((Math.exp(v - max) / Z) * 1e6) / 1e6, r: rank }
 }
 
+/** GridCell for a logit row, plus the row's softmax normalizers (max, Z) so a following
+ * targetStat call on the same row can skip recomputing them. */
 export function topkSoftmax(
   data: Float32Array,
   off: number,
   V: number,
   k: number,
   decode: (id: number) => string
-): GridCell {
+): GridCell & { max: number; Z: number } {
   let max = -Infinity
   for (let i = 0; i < V; i++) if (data[off + i] > max) max = data[off + i]
   let Z = 0
@@ -492,5 +504,5 @@ export function topkSoftmax(
   }
   top.sort((a, b) => b[1] - a[1])
   const entries = top.map(([id, v]): TopEntry => [decode(id), Math.exp(v - max) / Z, id])
-  return { token: entries[0][0], prob: entries[0][1], top: entries }
+  return { token: entries[0][0], prob: entries[0][1], top: entries, max, Z }
 }

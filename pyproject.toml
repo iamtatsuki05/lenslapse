@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lenslapse"
-version = "0.1.0"
+version = "0.1.1"
 description = "In-browser logit lens over training checkpoints: conversion pipeline and local probe server"
 authors = [{ name = "Tatsuki Okada", email = "tatsukio0522@gmail.com" }]
 license = { file = "LICENSE" }

@@ -317,6 +317,29 @@ def test_webapp_root_prefers_fresh_dist_and_requires_data(tmp_path: Path, monkey
     assert server._webapp_root() == dist
 
 
+def test_shipped_data_routes_reject_traversal_segments(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single '..' segment routes fine and previously joined straight into the webapp path —
+    GET /data/%2e%2e/index.html served webapp/index.html. Both routes must apply the same
+    segment guard the download fallback applies to itself, and never reach the network."""
+    webapp = tmp_path / "webapp"
+    (webapp / "data").mkdir(parents=True)
+    (webapp / "index.html").write_text("<html>shell</html>")
+    (webapp / "data" / "models.json").write_text("{}")
+    monkeypatch.setattr(server, "_webapp_root", lambda: webapp)
+    monkeypatch.setattr(server, "ensure_data_file", lambda *a: pytest.fail("must not fall through to a download"))
+    monkeypatch.setattr(server, "ensure_tokenizer_file", lambda *a: pytest.fail("must not fall through to a download"))
+
+    assert client.get("/data/%2e%2e/index.html").status_code == 404
+    assert client.get("/tokenizer/%2e%2e/index.html").status_code == 404
+    assert client.get("/data/pythia-70m/%2e%2e").status_code == 404
+    # a well-formed request still serves the bundled file, without touching the stubbed fallback
+    (webapp / "data" / "pythia-70m").mkdir()
+    (webapp / "data" / "pythia-70m" / "index.json").write_text("{}")
+    assert client.get("/data/pythia-70m/index.json").status_code == 200
+
+
 def test_probe_cache_key_cannot_collide_across_text_and_targets() -> None:
     from lenslapse.server import ProbeRequest, probe_cache_key
     from lenslapse.sources import CheckpointSource

@@ -57,7 +57,9 @@ export function renderTrajectory(
   svg.replaceChildren()
   if (!series.length || !steps.length) return
 
-  const xMax = xlog(steps.at(-1)!)
+  // floor at xlog(1): a live sweep computes step 0 first, so the first render can see
+  // steps=[0], where xlog(0)=0 would make this scale divide by zero and emit NaN everywhere
+  const xMax = Math.max(xlog(steps.at(-1)!), xlog(1))
   const X = (s: number) => M.left + (xlog(s) / xMax) * (W - M.left - M.right)
   const Y = (p: number) => M.top + (1 - p) * (H - M.top - M.bottom)
 

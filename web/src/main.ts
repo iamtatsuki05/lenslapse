@@ -150,8 +150,8 @@ const grid = new LensGrid($<HTMLCanvasElement>('lens-canvas'), {
   onPin(pinned) {
     state.pinned = pinned ? { layer: pinned.layer, pos: pinned.pos } : null
     syncHash()
-    refreshTrajectory()
-    updateRace()
+    guarded(refreshTrajectory())
+    guarded(updateRace())
   },
 })
 
@@ -272,6 +272,11 @@ async function refreshCompare(): Promise<void> {
       noCompareData('has no precomputed data for this prompt')
       return
     }
+    // during ▶ playback this fallback would fire a live probe per tick (~5/s — server POSTs, or
+    // checkpoint-sized ONNX downloads in-browser), each discarded by the next tick's viewGen
+    // bump; keep the last live-probed panel up instead — its caption names the step it shows —
+    // and let the refresh that follows the post-playback step change bring it current
+    if (playTimer !== undefined) return
     const engine = getEngine(cmpId)
     await enginesReady.get(engine.modelId)
     if (gen !== viewGen || cmpId !== state.compareId) return
@@ -291,7 +296,9 @@ async function refreshCompare(): Promise<void> {
     if (!compareAllowed()) return
     showCompare(cmpId, `${cmpId}:live:${promptText}`, res.grid, res.tokens, `step ${step.toLocaleString()} (live probe)`)
   } catch (e) {
-    if (gen === viewGen) {
+    // both guards, same as every success path: switching compare targets does not bump viewGen,
+    // so a discarded target's late failure must not hide the panel the new target just rendered
+    if (gen === viewGen && cmpId === state.compareId) {
       wrap.hidden = true
       status(`compare failed: ${(e as Error).message}`)
     }
@@ -314,7 +321,19 @@ function liveResultForStep(step: number): LiveResult | null {
     const res = sweep.byStep.get(key)
     if (res) return { ...res, text: state.liveText, step: key }
   }
-  return state.liveResult?.step === step ? state.liveResult : null
+  // a direct probe stores its result at the snapped (nearest live-capable) checkpoint, so
+  // resolve the requested step the same way — an exact-match-only check here meant the first
+  // probe from a non-live-capable slider position never rendered at all (the stale precomputed
+  // grid stayed up, wearing the new prompt's tooltips)
+  const direct = state.liveResult
+  return direct && (direct.step === step || direct.step === nearestLiveStep(step)) ? direct : null
+}
+
+/** Fire-and-forget a refresh from an event handler: a failed shard/index fetch surfaces in the
+ * status line instead of escaping as an unhandled promise rejection that leaves the old view up
+ * with no explanation. Awaited call sites (boot, runLiveProbe) keep their own, richer handling. */
+function guarded(p: Promise<unknown>): void {
+  void p.catch((e) => status(`data load failed: ${(e as Error).message}`))
 }
 
 async function refreshGrid(): Promise<void> {
@@ -460,9 +479,11 @@ async function refreshTrajectory(): Promise<void> {
         .sort((a, b) => b.points[b.points.length - 1][1] - a.points[a.points.length - 1][1])
       sub.textContent = `${state.pinned.layer === 0 ? 'embedding' : `layer ${state.pinned.layer}`}, position ${pos} across ${steps.length} live-probed checkpoints`
       const colors = assignSeriesColors(series)
-      renderTrajectory(svg, series, steps, currentStep(), { colors })
-      // in-browser sweeps only cover live-capable checkpoints — read the nearest probed one
+      // in-browser sweeps only cover live-capable checkpoints — read the nearest probed one,
+      // for the position marker too: the raw slider step can sit past the sweep's last covered
+      // checkpoint, which would draw the marker outside the viewBox (an invisible rule)
       const curKey = sweep.byStep.has(currentStep()) ? currentStep() : nearestStep(steps, currentStep())
+      renderTrajectory(svg, series, steps, curKey, { colors })
       const cur = sweep.byStep.get(curKey)
       const profile = cur?.tgt
         ? sweep.targets
@@ -540,6 +561,7 @@ function stopPlay(): void {
   b.textContent = '▶'
   b.setAttribute('aria-pressed', 'false')
   syncHash() // hash writes are skipped during playback (Safari rate-limits replaceState) — record where we stopped
+  void refreshCompare() // its live-probe fallback is skipped per tick during playback — catch it up
 }
 
 /** Whether the time-lapse playback (▶) has anywhere to play through: precomputed checkpoints
@@ -607,9 +629,9 @@ function randomView(): void {
   refreshBadgeAndTicks()
   refreshStepUI()
   syncHash()
-  refreshGrid()
-  refreshTrajectory()
-  updateRace()
+  guarded(refreshGrid())
+  guarded(refreshTrajectory())
+  guarded(updateRace())
 }
 
 function rebuildCompareSelect(): void {
@@ -678,8 +700,8 @@ function onStepChanged(): void {
       // skip viewGen++ here: a still-running background sweep (runSweep) treats a bumped viewGen
       // as "the user navigated away," and would cancel itself mid-sweep on every step ▶ advances
       // through — even though we're still watching the same live prompt play out.
-      refreshGrid()
-      refreshTrajectory()
+      guarded(refreshGrid())
+      guarded(refreshTrajectory())
       return
     }
     viewGen++
@@ -687,8 +709,8 @@ function onStepChanged(): void {
     liveDebounce = setTimeout(() => runLiveProbe(state.liveText), 350)
   } else {
     viewGen++
-    refreshGrid()
-    refreshTrajectory()
+    guarded(refreshGrid())
+    guarded(refreshTrajectory())
   }
 }
 
@@ -770,7 +792,7 @@ async function runSweep(): Promise<void> {
   const pin = state.pinned ?? { layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 }
   if (!state.pinned) {
     setPinned(pin)
-    refreshGrid()
+    guarded(refreshGrid())
   }
   const btn = $<HTMLButtonElement>('traj-sweep')
   btn.disabled = true
@@ -821,8 +843,8 @@ async function applyStory(card: StoryCard): Promise<void> {
     await runLiveProbe(card.text)
     if (card.pin === 'lastLayerLastPos' && state.liveResult?.text === card.text) {
       setPinned({ layer: state.liveResult.grid.layers - 1, pos: state.liveResult.grid.positions - 1 })
-      refreshGrid()
-      refreshTrajectory()
+      guarded(refreshGrid())
+      guarded(refreshTrajectory())
     }
     return
   }
@@ -835,16 +857,21 @@ async function applyStory(card: StoryCard): Promise<void> {
   refreshBadgeAndTicks()
   refreshStepUI()
   syncHash()
-  refreshGrid()
-  refreshTrajectory()
+  guarded(refreshGrid())
+  guarded(refreshTrajectory())
 }
 
 /** Track an arbitrary token: tokenize it, add it to the trace targets, and (re)run the sweep.
  * Works from a precomputed view too — the trace itself always runs live. */
 async function trackToken(raw: string): Promise<void> {
   if (!raw) return
+  // observe (don't bump) the view generation: engine init and server-side tokenize below can
+  // take seconds, and a model/prompt switch mid-await must not let this stale run register a
+  // token id from the OLD model's tokenizer — or re-probe the OLD text, yanking the view back
+  const gen = viewGen
   const engine = getEngine()
   await enginesReady.get(engine.modelId)
+  if (gen !== viewGen) return
   if (!engine.available) {
     status('tracking a token needs live probing, which is unavailable for this model right now')
     return
@@ -863,6 +890,7 @@ async function trackToken(raw: string): Promise<void> {
     status(`could not tokenize “${raw}”: ${(e as Error).message}`)
     return
   }
+  if (gen !== viewGen) return
   if (!ids.length) return
   const pick = firstContentToken(tokens)
   const id = ids[pick]
@@ -890,11 +918,13 @@ let kioskIdx = 0
 function kioskNext(): void {
   const card = STORY_CARDS[kioskIdx % STORY_CARDS.length]
   kioskIdx++
-  void applyStory(card).then(() => {
-    if (state.mode !== 'pre' || state.steps.length < 2) return
-    setStepIdx(0)
-    startPlay()
-  })
+  void applyStory(card)
+    .then(() => {
+      if (state.mode !== 'pre' || state.steps.length < 2) return
+      setStepIdx(0)
+      startPlay()
+    })
+    .catch((e) => status(`data load failed: ${(e as Error).message}`))
 }
 
 function nearestLiveStep(step: number, id: string = state.model!): number {
@@ -1109,7 +1139,7 @@ function mergeServerModels(serverModels: ServerModel[] | null): void {
     // the current model was unregistered under us; fall back to the shipped default
     state.model = catalog!.default ?? catalog!.models[0].id
     rebuildModelSelect()
-    switchModel(state.model)
+    guarded(switchModel(state.model))
     return
   }
   rebuildModelSelect()
@@ -1136,7 +1166,7 @@ async function boot(): Promise<void> {
 
   rebuildModelSelect()
   const msel = $<HTMLSelectElement>('model-select')
-  msel.addEventListener('change', () => switchModel(msel.value))
+  msel.addEventListener('change', () => guarded(switchModel(msel.value)))
   setupManageModels(mergeServerModels)
 
   const sel = $<HTMLSelectElement>('prompt-select')
@@ -1159,8 +1189,8 @@ async function boot(): Promise<void> {
     refreshBadgeAndTicks()
     status('')
     syncHash()
-    refreshGrid()
-    refreshTrajectory()
+    guarded(refreshGrid())
+    guarded(refreshTrajectory())
   })
 
   const deepLinked = location.hash.length > 1
@@ -1185,7 +1215,7 @@ async function boot(): Promise<void> {
     if (state.mode !== 'pre') return
     stopPlay()
     setGridView(state.gridView === 'acq' ? 'top1' : 'acq')
-    refreshGrid()
+    guarded(refreshGrid())
   })
   $('diff-toggle').addEventListener('click', () => {
     if (state.mode !== 'pre') return
@@ -1198,13 +1228,13 @@ async function boot(): Promise<void> {
       setGridView('diff')
       status(`diff mode: comparing against step ${state.diffRef.toLocaleString()} — scrub or play to see what changes`)
     }
-    refreshGrid()
+    guarded(refreshGrid())
   })
   $('log-toggle').addEventListener('click', () => {
     state.logColor = !state.logColor
     $('log-toggle').classList.toggle('active', state.logColor)
     setGridView(state.gridView) // refreshes the legend text for the new scale
-    refreshGrid()
+    guarded(refreshGrid())
   })
   const cmpSel = $<HTMLSelectElement>('compare-select')
   cmpSel.addEventListener('change', () => {
@@ -1214,9 +1244,9 @@ async function boot(): Promise<void> {
     refreshCompare()
   })
   $('dice-btn').addEventListener('click', () => randomView())
-  $('track-btn').addEventListener('click', () => trackToken($<HTMLInputElement>('track-input').value))
+  $('track-btn').addEventListener('click', () => guarded(trackToken($<HTMLInputElement>('track-input').value)))
   $('track-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') trackToken($<HTMLInputElement>('track-input').value)
+    if (e.key === 'Enter') guarded(trackToken($<HTMLInputElement>('track-input').value))
   })
   if (EMBED) {
     const a = $<HTMLAnchorElement>('embed-link')
@@ -1237,12 +1267,13 @@ async function boot(): Promise<void> {
     else stopPlay()
   })
 
-  buildGallery($('gallery-cards'), applyStory)
+  buildGallery($('gallery-cards'), (card) => guarded(applyStory(card)))
 
-  $('live-btn').addEventListener('click', () => runLiveProbe($<HTMLInputElement>('live-input').value))
-  $('traj-sweep').addEventListener('click', () => runSweep())
+  $('live-btn').addEventListener('click', () => guarded(runLiveProbe($<HTMLInputElement>('live-input').value)))
+  $('traj-sweep').addEventListener('click', () => guarded(runSweep()))
   $('live-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !$<HTMLButtonElement>('live-btn').disabled) runLiveProbe($<HTMLInputElement>('live-input').value)
+    if (e.key === 'Enter' && !$<HTMLButtonElement>('live-btn').disabled)
+      guarded(runLiveProbe($<HTMLInputElement>('live-input').value))
   })
 
   $('permalink-btn').addEventListener('click', async () => {

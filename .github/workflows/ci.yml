@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop] # develop is the integration branch — a direct push there must run CI too
   pull_request:
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
       - name: Run tests
         run: uv run tox
 
-  web:
+  test-web:
     runs-on: ubuntu-latest
     defaults:
       run:

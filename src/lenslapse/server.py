@@ -67,7 +67,7 @@ from lenslapse.sources import (
     resolve_tokenizer_ref,
     token_display_text,
 )
-from lenslapse.webdata import ensure_data_file, ensure_tokenizer_file
+from lenslapse.webdata import ensure_data_file, ensure_tokenizer_file, safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +190,9 @@ TOKENIZERS: OrderedDict = OrderedDict()  # (tok_ref, tok_revision, tok_subfolder
 # to the cache). One global lock serializes load+forward+write — fine for a batch-1 local server.
 PROBE_LOCK = threading.Lock()
 REG_LOCK = threading.Lock()  # registry mutations + registry-file writes
+TOK_LOCK = (
+    threading.Lock()
+)  # TOKENIZERS check→evict→insert (concurrent misses raced: duplicate loads, KeyError on an emptied dict)
 JOBS: dict = {}  # model id -> {"status": "running|done|failed", "log": deque}; conversions run one at a time
 JOBS_LOCK = threading.Lock()  # guards JOBS check-and-set (endpoints run concurrently in the threadpool)
 PICK_LOCK = threading.Lock()  # at most one native folder dialog at a time
@@ -615,11 +618,12 @@ def tokenize(req: TokenizeRequest) -> TokenizeResponse:
     src = source_for(req.model, steps[-1])
     tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(entry.tokenizer_ref, src)
     key = (tok_load_ref, tok_rev, tok_subfolder)
-    if key not in TOKENIZERS:
-        while len(TOKENIZERS) >= 8:
-            TOKENIZERS.popitem(last=False)
-        TOKENIZERS[key] = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
-    tok = TOKENIZERS[key]
+    with TOK_LOCK:
+        if key not in TOKENIZERS:
+            while len(TOKENIZERS) >= 8:
+                TOKENIZERS.popitem(last=False)
+            TOKENIZERS[key] = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
+        tok = TOKENIZERS[key]
     # no special tokens: the app tracks the first content token, which must never be a BOS
     ids = tok(req.text, add_special_tokens=False)["input_ids"]
     tokens = [token_display_text(tok, t) for t in tok.convert_ids_to_tokens(ids)]
@@ -674,22 +678,27 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     device = next(model.parameters()).device
     t1 = time.time()
     lp = lens_all(model, torch.tensor([ids], device=device)).float().cpu()
-    probs = lp.exp()
-    top = torch.topk(probs, TOPK, dim=-1)
+    # top-k on log-probs directly (exp is monotone, so the indices are identical) — avoids
+    # materializing a full [L+1, T, V] probability tensor just to top-k it. tolist() once,
+    # then index Python lists in the comprehension instead of scalar-indexing the tensor
+    # L*T*K times. Verified identical to the old path on real checkpoints; indices could differ
+    # only when top-k tail probabilities underflow to 0.0 in float32 (ties among prob-0 tokens).
+    top = torch.topk(lp, TOPK, dim=-1)
+    top_idx = top.indices.tolist()
+    top_prob = top.values.exp().tolist()
     t2 = time.time()
 
+    uniq_ids = sorted({i for layer in top_idx for pos in layer for i in pos})
+    id_to_display = {
+        tid: token_display_text(tok, tokstr) for tid, tokstr in zip(uniq_ids, tok.convert_ids_to_tokens(uniq_ids))
+    }
     cells = [
         [
             {
-                "token": token_display_text(tok, tok.convert_ids_to_tokens([int(top.indices[li, t, 0])])[0]),
-                "prob": float(top.values[li, t, 0]),
+                "token": id_to_display[top_idx[li][t][0]],
+                "prob": top_prob[li][t][0],
                 "top": [
-                    [
-                        token_display_text(tok, tok.convert_ids_to_tokens([int(top.indices[li, t, k])])[0]),
-                        float(top.values[li, t, k]),
-                        int(top.indices[li, t, k]),
-                    ]
-                    for k in range(TOPK)
+                    [id_to_display[top_idx[li][t][k]], top_prob[li][t][k], top_idx[li][t][k]] for k in range(TOPK)
                 ],
             }
             for t in range(lp.shape[1])
@@ -703,7 +712,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
         ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
         tgt[str(tid)] = {
             "token": token_display_text(tok, tok.convert_ids_to_tokens([tid])[0]),
-            "p": [[round(float(x), 6) for x in row] for row in probs[:, :, tid].tolist()],
+            "p": [[round(float(x), 6) for x in row] for row in lp[:, :, tid].exp().tolist()],
             "r": [[int(x) for x in row] for row in ranks.tolist()],
         }
 
@@ -771,6 +780,12 @@ def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
     in a checkout (already on disk there) or, for a pip install, from webdata's download cache
     (fetched from GitHub on first request — see lenslapse/webdata.py). Registered ahead of the
     `/` static mount in `main`, so it wins for these paths; unrelated 404s there are unaffected."""
+    # same guard as the download fallback applies to itself: a single ".." segment passes the
+    # router, and only webdata's own validation stood between it and the path join here. It
+    # could only ever reach files the `/` static mount already serves, but the two branches
+    # must not disagree about what a well-formed segment is.
+    if not (safe_segment(model_id) and safe_segment(filename)):
+        raise HTTPException(404, f"no data/{model_id}/{filename}")
     webapp = _webapp_root()
     if webapp is not None:
         bundled = webapp / "data" / model_id / filename
@@ -785,6 +800,8 @@ def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
 @app.get("/tokenizer/{model_id}/{filename}")
 def get_shipped_model_tokenizer(model_id: str, filename: str) -> FileResponse:
     """A shipped model's tokenizer file, same checkout-vs-cache split as get_shipped_model_data."""
+    if not (safe_segment(model_id) and safe_segment(filename)):
+        raise HTTPException(404, f"no tokenizer/{model_id}/{filename}")
     webapp = _webapp_root()
     if webapp is not None:
         bundled = webapp / "tokenizer" / model_id / filename
