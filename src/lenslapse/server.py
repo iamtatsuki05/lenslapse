@@ -48,6 +48,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub import model_info
 from pydantic import BaseModel, ValidationError
@@ -66,6 +67,7 @@ from lenslapse.sources import (
     resolve_tokenizer_ref,
     token_display_text,
 )
+from lenslapse.webdata import ensure_data_file, ensure_tokenizer_file
 
 logger = logging.getLogger(__name__)
 
@@ -738,9 +740,10 @@ def _webapp_root() -> Path | None:
 
     Serving the app from this server makes everything same-origin: no CORS, no
     private-network permission prompt, and converted models resolve via /models/ directly.
-    Preference: a fresh `npm run build` in a checkout, then the bundle shipped inside the
-    wheel (lenslapse/webapp: app shell committed to git, data/tokenizer force-included at
-    build time). A shell-only directory (repo tree without the wheel's data) is skipped."""
+    Preference: a fresh `npm run build` in a checkout, then the bundle shipped inside the wheel
+    (lenslapse/webapp: app shell + the models.json catalog committed to git; per-model data and
+    tokenizer files are fetched on demand instead — see get_shipped_model_data/_tokenizer below
+    and lenslapse/webdata.py). A directory missing even the catalog is skipped."""
     for root in _webapp_candidates():
         if (root / "index.html").is_file() and (root / "data" / "models.json").is_file():
             return root
@@ -760,6 +763,37 @@ def default_models_json() -> Path:
     if _IN_REPO:
         return _PKG_PARENT / "web/public/data/models.json"
     return Path(__file__).resolve().parent / "webapp" / "data" / "models.json"
+
+
+@app.get("/data/{model_id}/{filename}")
+def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
+    """A shipped model's precomputed index/prompt shard: served straight from the webapp root
+    in a checkout (already on disk there) or, for a pip install, from webdata's download cache
+    (fetched from GitHub on first request — see lenslapse/webdata.py). Registered ahead of the
+    `/` static mount in `main`, so it wins for these paths; unrelated 404s there are unaffected."""
+    webapp = _webapp_root()
+    if webapp is not None:
+        bundled = webapp / "data" / model_id / filename
+        if bundled.is_file():
+            return FileResponse(bundled)
+    path = ensure_data_file(_STATE_HOME / "webapp-data-cache", model_id, filename)
+    if path is None:
+        raise HTTPException(404, f"no data/{model_id}/{filename}")
+    return FileResponse(path)
+
+
+@app.get("/tokenizer/{model_id}/{filename}")
+def get_shipped_model_tokenizer(model_id: str, filename: str) -> FileResponse:
+    """A shipped model's tokenizer file, same checkout-vs-cache split as get_shipped_model_data."""
+    webapp = _webapp_root()
+    if webapp is not None:
+        bundled = webapp / "tokenizer" / model_id / filename
+        if bundled.is_file():
+            return FileResponse(bundled)
+    path = ensure_tokenizer_file(_STATE_HOME / "webapp-data-cache", model_id, filename)
+    if path is None:
+        raise HTTPException(404, f"no tokenizer/{model_id}/{filename}")
+    return FileResponse(path)
 
 
 class ServerConfig(BaseModel):

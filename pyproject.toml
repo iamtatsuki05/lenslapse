@@ -68,11 +68,12 @@ default-groups = ["dev"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/lenslapse"]
 
-# the web app's precomputed shards and tokenizers live in web/public (tracked in git);
-# bundling them next to the committed app shell makes `lenslapse server` fully self-contained
+# Only the catalog is bundled — per-model shards/tokenizers are ~180MB total, over PyPI's
+# 100MB per-file limit, so lenslapse/webdata.py fetches those from GitHub on first use instead
+# (see its module docstring). A repo checkout still has the full web/public/data|tokenizer on
+# disk and never hits that path.
 [tool.hatch.build.targets.wheel.force-include]
-"web/public/data" = "lenslapse/webapp/data"
-"web/public/tokenizer" = "lenslapse/webapp/tokenizer"
+"web/public/data/models.json" = "lenslapse/webapp/data/models.json"
 
 [tool.ruff]
 line-length = 119
