@@ -12,14 +12,16 @@ sessions and auditable as plain JSON files. Note the key is the *reference*, not
 for mutable refs (revision "main", local run directories) a re-trained model under the same
 path keeps replaying the old cached results — clear the cache directory after retraining.
 
-Usage:
+Usage::
+
   lenslapse server                  (pip install; serves the bundled app + API on one port)
   uv run lenslapse server           (repo checkout; serves the fresh web/dist build)
 
 The registry defaults to the app's models.json (hub suites with step{N} revisions); extend it
 with --extra for local runs or heavy hub models — a comma-separated list of specs (fire has no
 repeated-flag/append mechanism, so unlike the old argparse CLI this is one flag, not one per
-model), e.g.:
+model), e.g.::
+
   --extra "my-run=/path/to/trainer_output,llama=meta-llama/Llama-3.2-1B:final"
 
 Models can also be registered at runtime from the web app's "models" dialog (GET/POST/DELETE

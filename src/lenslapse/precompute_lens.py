@@ -1,6 +1,7 @@
 """Precompute logit-lens data for curated prompts across Pythia training checkpoints.
 
-Output layout (static JSON consumed by the web app):
+Output layout (static JSON consumed by the web app)::
+
   out_dir/index.json   model metadata, step list, prompt catalog (tokens, gold continuation, targets)
   out_dir/p{i}.json    per-prompt shard:
                          vocab: {token_id: token_string} for every id referenced
@@ -138,7 +139,7 @@ def main(
         prompts_file: JSON file with the same shape as PROMPTS (list of {text, gold, story});
             defaults to the built-in English curated set.
         revision_template: revision naming for hub suites, e.g. "global_step{}" for
-            bigscience/bloom-*-intermediate.
+            ``bigscience/bloom-*-intermediate``.
         tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights, as
             "repo_id" or "repo_id@revision"; see export_checkpoints.py.
     """
