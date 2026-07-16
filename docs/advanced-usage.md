@@ -151,3 +151,23 @@ node bench/bench.mjs --base http://localhost:5199 --out bench.json
 
 Measures checkpoint load and probe latency across browser engines (Chromium/Firefox/WebKit),
 execution providers (WebGPU/WASM), emulated CPU throttling, model sizes, and prompt lengths.
+
+## Publishing to PyPI
+
+`.github/workflows/publish-pypi.yml` runs the test suite on every push to `main`, then — only if
+`[project].version` in `pyproject.toml` names a version not already on PyPI — builds and uploads
+via [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC; no API token or
+GitHub secret to manage). Bump the version before merging to cut a new release; merges that don't
+just run the tests and skip the upload step.
+
+One-time setup, before the workflow's first real (non-skipped) run: on PyPI, under
+[your account's publishing settings](https://pypi.org/manage/account/publishing/), add a **pending
+publisher** for a new project named `lenslapse` with:
+
+- Owner: `iamtatsuki05`
+- Repository name: `lenslapse`
+- Workflow name: `publish-pypi.yml`
+- Environment name: `pypi`
+
+This claims the PyPI project name and authorizes this exact repo/workflow/environment to publish
+to it — the very first successful run creates the project on PyPI under your account.

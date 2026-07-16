@@ -1,0 +1,67 @@
+name: Publish to PyPI
+
+# Runs on every push to main, but only actually uploads when [project].version in pyproject.toml
+# names a version not already on PyPI -- PyPI rejects re-uploading an existing version outright,
+# so without this check every merge after the first would fail. Bump the version before merging
+# to cut a new release; merges that don't just skip the publish step (tests still run).
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      UV_TORCH_BACKEND: cpu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Run tests
+        run: uv run tox
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    # PyPI Trusted Publishing scopes its OIDC trust to a specific GitHub Environment name;
+    # see the one-time setup note in docs/advanced-usage.md before this job's first real run.
+    environment: pypi
+    permissions:
+      id-token: write # Trusted Publishing (OIDC) -- no PyPI API token/secret needed
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Check whether this version is already on PyPI
+        id: check
+        run: |
+          VERSION=$(uv run python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          status=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/lenslapse/$VERSION/json")
+          if [ "$status" = "200" ]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build
+        if: steps.check.outputs.already_published == 'false'
+        run: uv build
+      - name: Publish to PyPI
+        if: steps.check.outputs.already_published == 'false'
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Skip (version already published)
+        if: steps.check.outputs.already_published == 'true'
+        run: |
+          echo "::notice::lenslapse ${{ steps.check.outputs.version }} is already on PyPI -- skipping upload. Bump [project].version in pyproject.toml to publish a new release."
