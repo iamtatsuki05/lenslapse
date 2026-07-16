@@ -179,11 +179,16 @@ def main(
         for p in prompts:
             ids = torch.tensor([p["ids"]])
             lp = lens_all(step_model, ids)  # [L+1, T, V] log-probs
-            probs = lp.exp()
-            top = torch.topk(probs, TOPK, dim=-1)  # values/indices [L+1, T, K]
+            # top-k on log-probs directly (exp is monotone → identical indices), avoiding a full
+            # [L+1, T, V] probability tensor. tolist() the top-k once and index Python lists in the
+            # comprehension rather than scalar-indexing the tensor L*T*K times — exact-value
+            # transforms, verified byte-identical to the old exp-then-topk path.
+            top = torch.topk(lp, TOPK, dim=-1)  # values(log-probs)/indices [L+1, T, K]
+            top_idx = top.indices.tolist()
+            top_prob = top.values.exp().tolist()
 
             if step == final_step and p["id"] not in targets:
-                fin = top.indices[-1, :, :3].tolist()  # final layer top-3 per position
+                fin = [row[:3] for row in top_idx[-1]]  # final layer top-3 per position
                 tg = [list(dict.fromkeys(row)) for row in fin]
                 tg[-1] = list(dict.fromkeys(tg[-1] + [p["gold_id"]]))
                 targets[p["id"]] = tg
@@ -193,7 +198,7 @@ def main(
             entry: dict[str, Any] = {
                 "top": [
                     [
-                        [[int(top.indices[li, t, k]), round(float(top.values[li, t, k]), 5)] for k in range(TOPK)]
+                        [[top_idx[li][t][k], round(top_prob[li][t][k], 5)] for k in range(TOPK)]
                         for t in range(lp.shape[1])
                     ]
                     for li in range(lp.shape[0])
@@ -202,7 +207,7 @@ def main(
             }
             all_tgt_ids = sorted({i for row in tg for i in row})
             for tid in all_tgt_ids:
-                pvals = probs[:, :, tid]  # [L+1, T]
+                pvals = lp[:, :, tid].exp()  # [L+1, T], tiny slice
                 ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
                 entry["tgt"][str(tid)] = {
                     "p": [[round(float(x), 6) for x in row] for row in pvals.tolist()],

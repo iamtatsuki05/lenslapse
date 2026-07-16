@@ -133,10 +133,15 @@ export class LensGrid {
     const w = LABEL_W + grid.positions * CELL_W
     const h = HEADER_H + grid.layers * CELL_H
     const dpr = window.devicePixelRatio || 1
-    canvas.width = w * dpr
-    canvas.height = h * dpr
-    canvas.style.width = `${w}px`
-    canvas.style.height = `${h}px`
+    // assigning canvas.width/height reallocates the backing store and resets all context state,
+    // even when the value is unchanged — during playback the grid dimensions are fixed, so only
+    // touch them on an actual size change; clearRect + setTransform below already run every frame
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+      canvas.width = w * dpr
+      canvas.height = h * dpr
+      canvas.style.width = `${w}px`
+      canvas.style.height = `${h}px`
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
     this.renderTo(ctx, { dark: this.dark.matches })
