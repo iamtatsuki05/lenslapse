@@ -1,12 +1,12 @@
 // Trajectory panel: token probability vs training step (log x) for the pinned cell, as inline SVG.
 
+import { fmtStep, logStepFrac } from './data'
 import { displayToken } from './grid'
 import type { TrajectorySeries } from './data'
 
 const SERIES_COLORS = ['#4a5bd4', '#d4494a', '#1f9d6f', '#c97b0f', '#8b5cf6']
 const M = { top: 14, right: 12, bottom: 34, left: 40 }
-
-const xlog = (s: number) => Math.log10(s + 1)
+const AXIS_COLOR = 'color-mix(in oklab, currentColor 30%, transparent)'
 
 /** Stable token-id -> color map, so the trajectory, layer profile, and labels stay consistent. */
 export function assignSeriesColors(series: { id: number }[]): Map<number, string> {
@@ -57,26 +57,23 @@ export function renderTrajectory(
   svg.replaceChildren()
   if (!series.length || !steps.length) return
 
-  // floor at xlog(1): a live sweep computes step 0 first, so the first render can see
-  // steps=[0], where xlog(0)=0 would make this scale divide by zero and emit NaN everywhere
-  const xMax = Math.max(xlog(steps.at(-1)!), xlog(1))
-  const X = (s: number) => M.left + (xlog(s) / xMax) * (W - M.left - M.right)
+  const maxStep = steps.at(-1)!
+  const X = (s: number) => M.left + logStepFrac(s, maxStep) * (W - M.left - M.right)
   const Y = (p: number) => M.top + (1 - p) * (H - M.top - M.bottom)
 
   // axes + gridlines
-  const axisColor = 'color-mix(in oklab, currentColor 30%, transparent)'
   for (const p of [0, 0.25, 0.5, 0.75, 1]) {
-    mk(svg, 'line', { x1: M.left, x2: W - M.right, y1: Y(p), y2: Y(p), stroke: axisColor, 'stroke-width': p === 0 ? 1 : 0.4 })
+    mk(svg, 'line', { x1: M.left, x2: W - M.right, y1: Y(p), y2: Y(p), stroke: AXIS_COLOR, 'stroke-width': p === 0 ? 1 : 0.4 })
     mk(svg, 'text', { x: M.left - 6, y: Y(p) + 3.5, 'text-anchor': 'end', 'font-size': 9.5, fill: 'currentColor', opacity: 0.65 }, p.toFixed(2))
   }
   for (const s of [0, 10, 100, 1000, 10000, 100000]) {
-    if (s > steps.at(-1)!) break
-    mk(svg, 'line', { x1: X(s), x2: X(s), y1: M.top, y2: H - M.bottom, stroke: axisColor, 'stroke-width': 0.4 })
+    if (s > maxStep) break
+    mk(svg, 'line', { x1: X(s), x2: X(s), y1: M.top, y2: H - M.bottom, stroke: AXIS_COLOR, 'stroke-width': 0.4 })
     mk(
       svg,
       'text',
       { x: X(s), y: H - M.bottom + 13, 'text-anchor': 'middle', 'font-size': 9.5, fill: 'currentColor', opacity: 0.65 },
-      s >= 1000 ? `${s / 1000}k` : String(s)
+      fmtStep(s)
     )
   }
   mk(
@@ -129,9 +126,8 @@ export function renderLayerProfile(
   const yMax = Math.max(0.05, ...series.flatMap((s) => s.points.map((p) => p[1])))
   const Y = (p: number) => B.top + (1 - p / yMax) * (H - B.top - B.bottom)
 
-  const axisColor = 'color-mix(in oklab, currentColor 30%, transparent)'
   for (const p of [0, yMax]) {
-    mk(svg, 'line', { x1: B.left, x2: W - B.right, y1: Y(p), y2: Y(p), stroke: axisColor, 'stroke-width': p === 0 ? 1 : 0.4 })
+    mk(svg, 'line', { x1: B.left, x2: W - B.right, y1: Y(p), y2: Y(p), stroke: AXIS_COLOR, 'stroke-width': p === 0 ? 1 : 0.4 })
     mk(
       svg,
       'text',

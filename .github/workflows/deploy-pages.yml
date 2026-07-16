@@ -20,6 +20,8 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    # Sphinx autodoc imports the package, so this job syncs the full Python project; the CPU
+    # torch index pinned in pyproject ([tool.uv.sources]) keeps that from pulling CUDA wheels.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,13 +32,23 @@ jobs:
       - run: npm ci
         working-directory: web
       # deploy is gated on the web suite: a red typecheck/test run must never reach Pages.
-      # (The Python suite is not gated here — the site ships nothing from it.)
+      # (The Python test suite is not gated here — the Sphinx build below imports the package,
+      # so a broken package already fails this job; the tests themselves gate merges via CI.)
       - run: npm run typecheck
         working-directory: web
       - run: npm run test
         working-directory: web
       - run: npm run build
         working-directory: web
+      # Sphinx docs (guides + autodoc API reference) ship under /docs/ on the same site
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: sh scripts/build_docs.sh
+      - run: cp -R docs/_build/html web/dist/docs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

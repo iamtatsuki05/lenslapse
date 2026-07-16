@@ -2,7 +2,7 @@
 
 Local development, converting checkpoints, adding your own models, the local probe server for
 heavy models, CLI scripting, probe reproducibility, and benchmarking. See the
-[main README](../README.md) for the quick start.
+[main README](https://github.com/iamtatsuki05/lenslapse#readme) for the quick start.
 
 ## Develop
 
@@ -151,6 +151,20 @@ node bench/bench.mjs --base http://localhost:5199 --out bench.json
 
 Measures checkpoint load and probe latency across browser engines (Chromium/Firefox/WebKit),
 execution providers (WebGPU/WASM), emulated CPU throttling, model sizes, and prompt lengths.
+
+## Building the docs
+
+The documentation site (these guides plus a Sphinx-autodoc API reference, deployed at
+<https://iamtatsuki05.github.io/lenslapse/docs/>) builds with:
+
+```bash
+sh scripts/build_docs.sh   # regenerates docs/api/ from src/lenslapse, renders docs/_build/html
+```
+
+`sphinx-apidoc` re-derives the API stubs from the code on every build (both `docs/api/` and
+`docs/_build/` are gitignored), and the build treats warnings as errors, so a docstring that
+stops rendering fails loudly. Pages deployment copies the HTML under `/docs/` on the site
+(`.github/workflows/deploy-pages.yml`).
 
 ## Publishing to PyPI
 

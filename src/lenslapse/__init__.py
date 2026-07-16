@@ -4,4 +4,4 @@ This package holds the conversion/precompute pipeline and the optional local pro
 Install from git and run `lenslapse server` to probe models through the hosted web app.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"

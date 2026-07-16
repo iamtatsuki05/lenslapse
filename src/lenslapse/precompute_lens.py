@@ -1,6 +1,7 @@
 """Precompute logit-lens data for curated prompts across Pythia training checkpoints.
 
-Output layout (static JSON consumed by the web app):
+Output layout (static JSON consumed by the web app)::
+
   out_dir/index.json   model metadata, step list, prompt catalog (tokens, gold continuation, targets)
   out_dir/p{i}.json    per-prompt shard:
                          vocab: {token_id: token_string} for every id referenced
@@ -29,10 +30,10 @@ from transformers import AutoModelForCausalLM
 from lenslapse.arch import resolve
 from lenslapse.logging_utils import configure_cli_logging
 from lenslapse.sources import (
+    DEFAULT_STEPS_CSV,
     coerce_fire_csv_arg,
     load_tokenizer,
-    resolve_sources,
-    resolve_subfolder_sources,
+    resolve_all_sources,
     resolve_tokenizer_ref,
     token_display_text,
 )
@@ -89,11 +90,23 @@ def lens_all(model: "torch.nn.Module", input_ids: "torch.Tensor") -> "torch.Tens
     return torch.log_softmax(logits.float(), dim=-1)
 
 
+def target_stats(lp: "torch.Tensor", tid: int) -> dict[str, list[list[Any]]]:
+    """Exact probability (rounded to 6 decimals) and strictly-greater rank of one target token per
+    (layer, position), from `lp` [L+1, T, V] log-probs. The precomputed shards and the probe
+    server's /probe both serialize targets through this one function: the app overlays live and
+    precomputed trajectories, so the two paths must agree to the digit."""
+    ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
+    return {
+        "p": [[round(float(x), 6) for x in row] for row in lp[:, :, tid].exp().tolist()],
+        "r": [[int(x) for x in row] for row in ranks.tolist()],
+    }
+
+
 class PrecomputeConfig(BaseModel):
     """Validated arguments for `precompute_lens`; see `main`'s docstring for what each means."""
 
     model: str = "EleutherAI/pythia-70m"
-    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
+    steps: str = DEFAULT_STEPS_CSV
     out: Path
     final_only: bool = False
     subfolder_map: str | None = None
@@ -107,7 +120,7 @@ class PrecomputeConfig(BaseModel):
 def main(
     out: str,
     model: str = "EleutherAI/pythia-70m",
-    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000",
+    steps: str = DEFAULT_STEPS_CSV,
     final_only: bool = False,
     subfolder_map: str | None = None,
     prompts_file: str | None = None,
@@ -126,7 +139,7 @@ def main(
         prompts_file: JSON file with the same shape as PROMPTS (list of {text, gold, story});
             defaults to the built-in English curated set.
         revision_template: revision naming for hub suites, e.g. "global_step{}" for
-            bigscience/bloom-*-intermediate.
+            ``bigscience/bloom-*-intermediate``.
         tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights, as
             "repo_id" or "repo_id@revision"; see export_checkpoints.py.
     """
@@ -142,11 +155,7 @@ def main(
     )
 
     cfg.out.mkdir(parents=True, exist_ok=True)
-    sources = (
-        resolve_subfolder_sources(cfg.model, cfg.subfolder_map)
-        if cfg.subfolder_map
-        else resolve_sources(cfg.model, cfg.steps, cfg.final_only, cfg.revision_template)
-    )
+    sources = resolve_all_sources(cfg.model, cfg.steps, cfg.final_only, cfg.subfolder_map, cfg.revision_template)
     by_step = {src.step: src for src in sources}
     steps_sorted = sorted(by_step)
     final_step = steps_sorted[-1]
@@ -208,12 +217,7 @@ def main(
             }
             all_tgt_ids = sorted({i for row in tg for i in row})
             for tid in all_tgt_ids:
-                pvals = lp[:, :, tid].exp()  # [L+1, T], tiny slice
-                ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
-                entry["tgt"][str(tid)] = {
-                    "p": [[round(float(x), 6) for x in row] for row in pvals.tolist()],
-                    "r": [[int(x) for x in row] for row in ranks.tolist()],
-                }
+                entry["tgt"][str(tid)] = target_stats(lp, tid)
             sh["steps"][str(step)] = entry
             ref_ids = {int(i) for layer in entry["top"] for pos in layer for i, _ in pos} | set(all_tgt_ids)
             for tid in ref_ids:

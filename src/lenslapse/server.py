@@ -12,14 +12,16 @@ sessions and auditable as plain JSON files. Note the key is the *reference*, not
 for mutable refs (revision "main", local run directories) a re-trained model under the same
 path keeps replaying the old cached results — clear the cache directory after retraining.
 
-Usage:
+Usage::
+
   lenslapse server                  (pip install; serves the bundled app + API on one port)
   uv run lenslapse server           (repo checkout; serves the fresh web/dist build)
 
 The registry defaults to the app's models.json (hub suites with step{N} revisions); extend it
 with --extra for local runs or heavy hub models — a comma-separated list of specs (fire has no
 repeated-flag/append mechanism, so unlike the old argparse CLI this is one flag, not one per
-model), e.g.:
+model), e.g.::
+
   --extra "my-run=/path/to/trainer_output,llama=meta-llama/Llama-3.2-1B:final"
 
 Models can also be registered at runtime from the web app's "models" dialog (GET/POST/DELETE
@@ -55,8 +57,9 @@ from pydantic import BaseModel, ValidationError
 from transformers import AutoModelForCausalLM
 
 from lenslapse.logging_utils import configure_cli_logging
-from lenslapse.precompute_lens import lens_all
+from lenslapse.precompute_lens import lens_all, target_stats
 from lenslapse.sources import (
+    DEFAULT_STEPS_CSV,
     MODE_CHOICES,
     CheckpointSource,
     DType,
@@ -73,28 +76,7 @@ logger = logging.getLogger(__name__)
 
 TOPK = 10
 MAX_TOKENS = 64
-DEFAULT_SUITE_STEPS = [
-    0,
-    1,
-    2,
-    4,
-    8,
-    16,
-    32,
-    64,
-    128,
-    256,
-    512,
-    1000,
-    2000,
-    4000,
-    8000,
-    16000,
-    32000,
-    64000,
-    128000,
-    143000,
-]
+DEFAULT_SUITE_STEPS = [int(s) for s in DEFAULT_STEPS_CSV.split(",")]
 MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 app = FastAPI(title="LensLapse probe server")
@@ -709,11 +691,9 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     for tid in sorted(set(req.targets or [])):
         if not 0 <= tid < lp.shape[-1]:
             raise HTTPException(400, f"target id {tid} is outside the vocabulary (0..{lp.shape[-1] - 1})")
-        ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
         tgt[str(tid)] = {
             "token": token_display_text(tok, tok.convert_ids_to_tokens([tid])[0]),
-            "p": [[round(float(x), 6) for x in row] for row in lp[:, :, tid].exp().tolist()],
-            "r": [[int(x) for x in row] for row in ranks.tolist()],
+            **target_stats(lp, tid),
         }
 
     result = {
@@ -774,43 +754,40 @@ def default_models_json() -> Path:
     return Path(__file__).resolve().parent / "webapp" / "data" / "models.json"
 
 
-@app.get("/data/{model_id}/{filename}")
-def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
-    """A shipped model's precomputed index/prompt shard: served straight from the webapp root
-    in a checkout (already on disk there) or, for a pip install, from webdata's download cache
-    (fetched from GitHub on first request — see lenslapse/webdata.py). Registered ahead of the
-    `/` static mount in `main`, so it wins for these paths; unrelated 404s there are unaffected."""
+def _serve_shipped(
+    kind: str, model_id: str, filename: str, ensure: Callable[[Path, str, str], Path | None]
+) -> FileResponse:
+    """A shipped model's static file under `kind` ("data" or "tokenizer"): served straight from
+    the webapp root in a checkout (already on disk there) or, for a pip install, from webdata's
+    download cache (fetched from GitHub on first request — see lenslapse/webdata.py)."""
     # same guard as the download fallback applies to itself: a single ".." segment passes the
     # router, and only webdata's own validation stood between it and the path join here. It
     # could only ever reach files the `/` static mount already serves, but the two branches
     # must not disagree about what a well-formed segment is.
     if not (safe_segment(model_id) and safe_segment(filename)):
-        raise HTTPException(404, f"no data/{model_id}/{filename}")
+        raise HTTPException(404, f"no {kind}/{model_id}/{filename}")
     webapp = _webapp_root()
     if webapp is not None:
-        bundled = webapp / "data" / model_id / filename
+        bundled = webapp / kind / model_id / filename
         if bundled.is_file():
             return FileResponse(bundled)
-    path = ensure_data_file(_STATE_HOME / "webapp-data-cache", model_id, filename)
+    path = ensure(_STATE_HOME / "webapp-data-cache", model_id, filename)
     if path is None:
-        raise HTTPException(404, f"no data/{model_id}/{filename}")
+        raise HTTPException(404, f"no {kind}/{model_id}/{filename}")
     return FileResponse(path)
+
+
+@app.get("/data/{model_id}/{filename}")
+def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
+    """A shipped model's precomputed index/prompt shard. Registered ahead of the `/` static
+    mount in `main`, so it wins for these paths; unrelated 404s there are unaffected."""
+    return _serve_shipped("data", model_id, filename, ensure_data_file)
 
 
 @app.get("/tokenizer/{model_id}/{filename}")
 def get_shipped_model_tokenizer(model_id: str, filename: str) -> FileResponse:
-    """A shipped model's tokenizer file, same checkout-vs-cache split as get_shipped_model_data."""
-    if not (safe_segment(model_id) and safe_segment(filename)):
-        raise HTTPException(404, f"no tokenizer/{model_id}/{filename}")
-    webapp = _webapp_root()
-    if webapp is not None:
-        bundled = webapp / "tokenizer" / model_id / filename
-        if bundled.is_file():
-            return FileResponse(bundled)
-    path = ensure_tokenizer_file(_STATE_HOME / "webapp-data-cache", model_id, filename)
-    if path is None:
-        raise HTTPException(404, f"no tokenizer/{model_id}/{filename}")
-    return FileResponse(path)
+    """A shipped model's tokenizer file, same checkout-vs-cache split as the data route."""
+    return _serve_shipped("tokenizer", model_id, filename, ensure_tokenizer_file)
 
 
 class ServerConfig(BaseModel):

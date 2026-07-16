@@ -14,8 +14,8 @@ import {
   promptLangLabel,
   trajectoryFromShard,
 } from './data'
-import { LensGrid, cellKey } from './grid'
-import { LiveEngine, fetchServerModels, probeServerOrigin } from './live'
+import { LensGrid, cellKey, layerLabel } from './grid'
+import { DEFAULT_PROBE_ORIGIN, LiveEngine, fetchServerModels, probeServerOrigin } from './live'
 import { setupManageModels } from './manage'
 import { renderRace } from './race'
 import { firstContentToken, probeCliCommand, probeCurlCommand } from './snippets'
@@ -477,7 +477,7 @@ async function refreshTrajectory(): Promise<void> {
         }))
         .filter((sr) => sr.points.length)
         .sort((a, b) => b.points[b.points.length - 1][1] - a.points[a.points.length - 1][1])
-      sub.textContent = `${state.pinned.layer === 0 ? 'embedding' : `layer ${state.pinned.layer}`}, position ${pos} across ${steps.length} live-probed checkpoints`
+      sub.textContent = `${layerLabel(state.pinned.layer)}, position ${pos} across ${steps.length} live-probed checkpoints`
       const colors = assignSeriesColors(series)
       // in-browser sweeps only cover live-capable checkpoints — read the nearest probed one,
       // for the position marker too: the raw slider step can sit past the sweep's last covered
@@ -522,7 +522,7 @@ async function refreshTrajectory(): Promise<void> {
   if (gen !== viewGen) return
   const { layer, pos } = state.pinned
   const series = trajectoryFromShard(shard, prompt, layer, pos, index!.steps)
-  sub.textContent = `${layer === 0 ? 'embedding' : `layer ${layer}`}, position ${pos} (“${prompt.tokens[pos]}” →)`
+  sub.textContent = `${layerLabel(layer)}, position ${pos} (“${prompt.tokens[pos]}” →)`
   const goldId = pos === prompt.tokens.length - 1 ? prompt.gold_id : undefined
   const colors = assignSeriesColors(series)
   renderTrajectory(svg, series, index!.steps, currentStep(), { goldId, colors })
@@ -932,7 +932,7 @@ function nearestLiveStep(step: number, id: string = state.model!): number {
   if (eng?.server) return step // the probe server can load any suite checkpoint
   const ls = eng?.liveSteps() ?? []
   if (!ls.length) return step
-  return ls.reduce((a, b) => (Math.abs(b - step) < Math.abs(a - step) ? b : a))
+  return nearestStep(ls, step)
 }
 
 /* ---------- permalink ---------- */
@@ -1324,7 +1324,7 @@ async function boot(): Promise<void> {
     $('export-menu').removeAttribute('open')
     const text = state.mode === 'live' ? state.liveText : currentPrompt().text
     const step = state.mode === 'live' ? (state.liveResult?.step ?? currentStep()) : currentStep()
-    const origin = probeServerOrigin() ?? 'http://localhost:8017'
+    const origin = probeServerOrigin() ?? DEFAULT_PROBE_ORIGIN
     const cmd =
       kind === 'cli' ? probeCliCommand(state.model!, text, step) : probeCurlCommand(origin, state.model!, text, step)
     try {

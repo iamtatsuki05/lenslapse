@@ -1,6 +1,7 @@
 """Resolve a model source into (load_ref, revision, step) tuples for export/precompute.
 
-Four source shapes are supported:
+Four source shapes are supported::
+
   1. Hub suite     : --model EleutherAI/pythia-70m --steps 0,1000,...   -> revisions step{N}
   2. Hub single    : --model gpt2 --final-only                          -> revision main, step 0
   3. Local dir     : --model /path/to/run --local-checkpoints           -> checkpoint-*/ subdirs
@@ -30,6 +31,11 @@ MODE_CHOICES: tuple[Mode, ...] = ("suite", "final", "local")
 
 DType = Literal["float32", "float16", "bfloat16", "auto"]
 DTYPE_CHOICES: tuple[DType, ...] = ("float32", "float16", "bfloat16", "auto")
+
+# The Pythia suite's public checkpoint grid — the default for every CLI's --steps and the
+# server's suite mode. One definition: the CLIs, their Config models, and DEFAULT_SUITE_STEPS
+# in server.py must all agree or exported/precomputed/served checkpoint sets silently diverge.
+DEFAULT_STEPS_CSV = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
 
 
 def coerce_fire_csv_arg(v: object) -> object:
@@ -103,13 +109,28 @@ def resolve_subfolder_sources(model: str, subfolder_map: str) -> list[Checkpoint
     return [CheckpointSource(model, None, step, subfolder=sub) for step, sub in sorted(by_step.items())]
 
 
+def resolve_all_sources(
+    model: str,
+    steps: str,
+    final_only: bool = False,
+    subfolder_map: str | None = None,
+    revision_template: str = "step{}",
+) -> list[CheckpointSource]:
+    """The one precedence rule every CLI shares: a --subfolder-map fully replaces the
+    steps/final-only/revision-template resolution (shape 4 repos label checkpoints by
+    subfolder, not by git revision)."""
+    if subfolder_map:
+        return resolve_subfolder_sources(model, subfolder_map)
+    return resolve_sources(model, steps, final_only, revision_template)
+
+
 def resolve_tokenizer_ref(tokenizer_ref: str | None, fallback: CheckpointSource) -> tuple[str, str | None, str]:
     """Where to load the tokenizer from: `tokenizer_ref` ("repo_id" or "repo_id@revision") when
     given, else the same ref as `fallback` (typically sources[0]). Returns
     (load_ref, revision, subfolder) ready to splat into AutoTokenizer.from_pretrained(...).
 
     A --tokenizer-ref override is for repos where the per-checkpoint tokenizer files don't load
-    cleanly (bigscience/bloom-*-intermediate, a transformers-version incompatibility) or live in a
+    cleanly (``bigscience/bloom-*-intermediate``, a transformers-version incompatibility) or live in a
     separate repo entirely (m-a-p/neo_scalinglaw_*, whose tokenizer is only published under
     m-a-p/neo_7b) — always safe when it applies, since the tokenizer is identical across
     checkpoints of the same pretraining run.
