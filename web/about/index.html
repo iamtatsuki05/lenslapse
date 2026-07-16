@@ -10,7 +10,7 @@
     />
     <meta
       name="description"
-      content="LensLapse: watching language models learn with an in-browser logit lens over training checkpoints."
+      content="LensLapse: an in-browser logit lens for interactive exploration of language model training dynamics."
     />
     <title>LensLapse — project page</title>
     <link rel="stylesheet" href="./about.css" />
@@ -19,7 +19,7 @@
     <div class="page">
       <header class="hero">
         <div class="logo" aria-hidden="true">⧖</div>
-        <h1>LensLapse: Watching Language Models Learn with an In-Browser Logit Lens over Training Checkpoints</h1>
+        <h1>LensLapse: An In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics</h1>
         <p class="authors">Tatsuki Okada · Yusuke Sakai · Taro Watanabe</p>
         <p class="affiliation">Nara Institute of Science and Technology (NAIST), Japan</p>
         <p class="tagline">
@@ -53,17 +53,19 @@
         <h2>Abstract</h2>
         <div class="abstract">
           <p>
-            The logit lens is a standard instrument for inspecting how a transformer's next-token prediction forms
-            across layers — yet every hosted lens tool inspects a single finished model. LensLapse turns training time
-            into a first-class axis of token-level interpretability: scrub a slider across 38 public checkpoints of
-            Pythia-70M and watch per-layer, per-position lens predictions crystallize from early frequency bias into
-            factual knowledge. The same architecture-generic recipe also converts three multilingual checkpoint
-            suites — MAP-Neo-250M, BAAI Aquila-135M, and BLOOM-560M — with no changes to the lens itself. Curated
-            prompts render instantly from precomputed data, while any free-text prompt is probed live in the browser
-            via WebGPU/WASM ONNX inference — no server, no API key, and your prompt never leaves your device. The
-            in-browser lens matches fp32 PyTorch with 100% top-1 agreement on our evaluation suite (where int8
-            quantization degrades to as low as 52%), and warm probes complete in 63–316&nbsp;ms on Chromium/WebKit
-            across three model sizes (14M–160M).
+            The logit lens is a standard mechanistic interpretability tool for inspecting a Transformer's
+            predictions across layers. However, existing logit lens tools are limited to analyzing a single trained
+            model and are not designed for interactive exploration of a model's <em>training history</em>. We
+            present <strong>LensLapse</strong>, an open-source web application for interactive exploration of a
+            model's training history through token-level interpretability. Users can scrub a slider across public
+            checkpoints from five model families and three multilingual checkpoint suites and observe how per-layer,
+            per-position logit lens predictions evolve from frequency bias to factual knowledge. Arbitrary user
+            prompts are probed <em>live in the browser</em> via WebGPU/WASM ONNX inference over per-checkpoint model
+            pairs. No server, no API key, no hosting cost, and prompts never leave the user's device. Moreover,
+            <strong>LensLapse</strong> supports local models. A single <code>pip install</code> easily launches the
+            application, allowing users to explore their own models and training checkpoints without any additional
+            web setup. LensLapse is MIT-licensed and permanently hosted at
+            <a href="https://iamtatsuki05.github.io/lenslapse/">iamtatsuki05.github.io/lenslapse</a>.
           </p>
         </div>
       </section>
@@ -199,7 +201,7 @@ browser (static site, no backend)
         <h2>BibTeX</h2>
         <pre>
 @misc{okada2026lenslapse,
-  title  = {LensLapse: Watching Language Models Learn with an In-Browser Logit Lens over Training Checkpoints},
+  title  = {LensLapse: An In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics},
   author = {Tatsuki Okada and Yusuke Sakai and Taro Watanabe},
   year   = {2026},
   url    = {https://github.com/iamtatsuki05/lenslapse}
