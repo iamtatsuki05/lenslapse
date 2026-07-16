@@ -37,6 +37,9 @@ jobs:
     environment: pypi
     permissions:
       id-token: write # Trusted Publishing (OIDC) -- no PyPI API token/secret needed
+    env:
+      UV_TORCH_BACKEND: cpu # the version-check step's `uv run` still syncs the project first;
+      # without this it pulls the multi-GB CUDA-bundled torch on every push, published or not
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -10,7 +10,9 @@ server.py, which is checked first).
 """
 
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -59,9 +61,19 @@ def _fetch(url: str) -> bytes | None:
 
 def _write(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(body)
-    tmp.replace(path)  # atomic: a crash mid-download must not leave a corrupt cached file
+    # a per-call-unique tmp name (mkstemp), not a fixed f"{name}.tmp": two concurrent requests
+    # for the same not-yet-cached file (e.g. a browser firing off several shard fetches for a
+    # model's first open) would otherwise both target the same tmp path, and whichever's
+    # tmp.replace() lost the race would crash on the other's already-consumed tmp file — hit in
+    # practice at a 60% failure rate under real concurrent HTTP requests before this fix.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(body)
+        Path(tmp_name).replace(path)  # atomic: a crash mid-download must not leave a corrupt file
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def ensure_data_file(cache_root: Path, model_id: str, filename: str) -> Path | None:
