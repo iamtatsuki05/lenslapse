@@ -21,7 +21,7 @@
 | BAAI Aquila | 135M | 6 training steps (Hub subfolders) | Chinese/English |
 | BLOOM | 560M | 8 training steps (`global_step{N}` revisions) | Multilingual (46 languages) |
 | SmolLM2 | 135M | final checkpoint | English |
-| Qwen3 | 0.6B | final checkpoint | Chinese/English |
+| Qwen3 | 0.6B | final checkpoint | Multilingual |
 | OPT | 125M | final checkpoint | English |
 | Gemma 3 | 270M | final checkpoint | Multilingual |
 
