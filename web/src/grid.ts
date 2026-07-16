@@ -140,19 +140,23 @@ export class LensGrid {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, w, h)
     this.renderTo(ctx, { dark: this.dark.matches })
-    // change-flash overlay lives here, NOT in renderTo: exported figures must never carry it
-    const outline = (cells: Set<string>, color: string) => {
-      ctx.strokeStyle = color
-      ctx.lineWidth = 2
-      for (const key of cells) {
-        const { layer, pos: t } = parseCellKey(key)
-        if (layer < 0 || layer >= grid.layers || t < 0 || t >= grid.positions) continue
-        const row = grid.layers - 1 - layer
-        ctx.strokeRect(LABEL_W + t * CELL_W + 1, HEADER_H + row * CELL_H + 1, CELL_W - 2, CELL_H - 2)
-      }
+    // the transient change-flash overlay lives here, NOT in renderTo: exported figures must
+    // never carry it. The persistent diff-view marks, by contrast, ARE part of the view (the
+    // legend says "outline = top-1 flipped") and are drawn inside renderTo so exports keep them.
+    if (this.flash) this.outlineCells(ctx, this.flash, this.dark.matches ? '#ffd166' : '#e8590c')
+  }
+
+  private outlineCells(ctx: CanvasRenderingContext2D, cells: Set<string>, color: string): void {
+    const { grid } = this
+    if (!grid) return
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    for (const key of cells) {
+      const { layer, pos: t } = parseCellKey(key)
+      if (layer < 0 || layer >= grid.layers || t < 0 || t >= grid.positions) continue
+      const row = grid.layers - 1 - layer
+      ctx.strokeRect(LABEL_W + t * CELL_W + 1, HEADER_H + row * CELL_H + 1, CELL_W - 2, CELL_H - 2)
     }
-    if (this.marks) outline(this.marks, this.dark.matches ? '#ffd166' : '#e8590c')
-    if (this.flash) outline(this.flash, this.dark.matches ? '#ffd166' : '#e8590c')
   }
 
   /** Grid pixel size at scale 1 (used by the figure exporter). */
@@ -196,11 +200,17 @@ export class LensGrid {
         }
       }
     }
+    if (this.marks) this.outlineCells(ctx, this.marks, dark ? '#ffd166' : '#e8590c')
   }
 }
 
 export function displayToken(tok: string): string {
-  return tok.replace(/^[Ġ▁ ]/, '␣').replace(/\n/g, '⏎').replace(/Ċ/g, '⏎')
+  // every leading marker, not just the first: multi-space BPE tokens are 'ĠĠ…' and
+  // SentencePiece indentation is '▁▁▁▁' — code prompts hit both
+  return tok
+    .replace(/^[Ġ▁ ]+/, (m) => '␣'.repeat(m.length))
+    .replace(/\n/g, '⏎')
+    .replace(/Ċ/g, '⏎')
 }
 
 function clip(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {

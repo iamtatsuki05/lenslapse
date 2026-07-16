@@ -18,6 +18,14 @@ describe('displayToken', () => {
     expect(displayToken('Ċ')).toBe('⏎')
     expect(displayToken('cat')).toBe('cat')
   })
+
+  it('replaces every leading marker, not just the first (multi-space BPE, SP indentation)', () => {
+    expect(displayToken('ĠĠ')).toBe('␣␣')
+    expect(displayToken('▁▁▁▁if')).toBe('␣␣␣␣if')
+    expect(displayToken('  cat')).toBe('␣␣cat')
+    // markers past the leading run are part of the token text, left alone
+    expect(displayToken('aĠb')).toBe('aĠb')
+  })
 })
 
 describe('setBadge', () => {
@@ -52,5 +60,14 @@ describe('buildSliderTicks', () => {
     expect(lefts[2]).toBeCloseTo(100, 6)
     expect(lefts[0]).toBeLessThan(lefts[1])
     expect(lefts[1]).toBeLessThan(lefts[2])
+  })
+
+  it('emits no NaN positions when the only step is 0 (server-registered final model)', () => {
+    // model_steps() returns [0] for a single-checkpoint model on the probe server: maxStep=0
+    // made the log scale divide by zero and set left:"NaN%" on the lone tick
+    const container = document.createElement('div')
+    buildSliderTicks(container, [0], [0], 0)
+    const tick = container.children[0] as HTMLElement
+    expect(tick.style.left).toBe('0%')
   })
 })

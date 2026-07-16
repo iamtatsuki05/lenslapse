@@ -39,7 +39,7 @@ _TOKENIZER_CANDIDATES = [
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def _safe(segment: str) -> bool:
+def safe_segment(segment: str) -> bool:
     """Reject anything but a plain filename/id segment — no `/`, `..`, or other path escapes,
     since both come from request paths and end up in local filesystem paths and upstream URLs."""
     return bool(_SAFE_SEGMENT.match(segment)) and segment != ".." and segment != "."
@@ -79,7 +79,7 @@ def _write(path: Path, body: bytes) -> None:
 def ensure_data_file(cache_root: Path, model_id: str, filename: str) -> Path | None:
     """Local path to data/<model_id>/<filename> (index.json or one prompt shard p{id}.json),
     downloading and caching it on first request. None if it doesn't exist upstream either."""
-    if not (_safe(model_id) and _safe(filename)):
+    if not (safe_segment(model_id) and safe_segment(filename)):
         return None
     # only p{id}.json (for an id actually listed in this model's own index) or index.json
     # itself is fetchable — rejects typos and any attempt to use this route to pull arbitrary
@@ -115,7 +115,7 @@ def ensure_tokenizer_file(cache_root: Path, model_id: str, filename: str) -> Pat
     """Local path to tokenizer/<model_id>/<filename>, downloading the model's full tokenizer
     (every file in _TOKENIZER_CANDIDATES that exists upstream) on first request for it. None if
     the model has no tokenizer directory upstream at all, or filename isn't a real member of it."""
-    if not (_safe(model_id) and _safe(filename)) or filename not in _TOKENIZER_CANDIDATES:
+    if not (safe_segment(model_id) and safe_segment(filename)) or filename not in _TOKENIZER_CANDIDATES:
         return None
     tok_dir = cache_root / "tokenizer" / model_id
     marker = tok_dir / ".complete"

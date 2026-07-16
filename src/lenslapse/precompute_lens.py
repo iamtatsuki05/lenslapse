@@ -156,8 +156,12 @@ def main(
     prompt_defs = json.loads(Path(cfg.prompts_file).read_text()) if cfg.prompts_file else PROMPTS
     prompts: list[dict[str, Any]] = []
     for i, p in enumerate(prompt_defs):
+        # the model's own default (special tokens included — gemma3's shards really start with
+        # <bos>): this is the GRID tokenization convention, shared with the probe server's /probe
+        # and the browser's in-ONNX probe, so live and precomputed grids line up position for
+        # position. Token-PICKING paths (gold below, /tokenize, the app's track feature) instead
+        # disable special tokens — they must never select a BOS.
         ids = tok(p["text"])["input_ids"]
-        # no special tokens: a BOS-prepending tokenizer (Llama-style) would make gold_id the BOS id
         gold_id = tok(p["gold"], add_special_tokens=False)["input_ids"][0]
         prompts.append({"id": i, **p, "ids": ids, "gold_id": gold_id})
 

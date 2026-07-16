@@ -389,6 +389,9 @@ export class LiveEngine {
   async probeOnnx(text: string, step: number, onStatus?: StatusFn, targets?: number[]): Promise<ProbeResult> {
     const t0 = performance.now()
     const { backbone, lens } = await this.loadCheckpoint(step, onStatus)
+    // tokenizer default (special tokens INCLUDED): the grid convention, deliberately the
+    // opposite of tokenize() above — precomputed shards and the probe server tokenize the same
+    // way, so a BOS-prepending model (gemma3) keeps its positions aligned across all three paths
     const enc = this.tokenizer!(text)
     const ids = enc.input_ids.data as BigInt64Array // BigInt64Array
     const T = ids.length
