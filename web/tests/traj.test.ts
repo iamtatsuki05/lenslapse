@@ -43,6 +43,19 @@ describe('renderTrajectory', () => {
     renderTrajectory(svg, series(), [], 0)
     expect(svg.children).toHaveLength(0)
   })
+
+  it('emits no NaN/Infinity attributes when the only step is 0 (first live-sweep result)', () => {
+    // A live sweep computes step 0 first, so the chart's first render sees steps=[0]:
+    // xlog(0)=0 made the x-scale divide by zero and spray NaN into every element.
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg') as SVGSVGElement
+    renderTrajectory(svg, [{ id: 1, token: 'Ġthe', points: [[0, 0.5, 1]] }], [0], 0)
+    expect(svg.children.length).toBeGreaterThan(0)
+    for (const el of svg.querySelectorAll('*')) {
+      for (const attr of el.getAttributeNames()) {
+        expect(el.getAttribute(attr)).not.toMatch(/NaN|Infinity/)
+      }
+    }
+  })
 })
 
 describe('renderLayerProfile', () => {

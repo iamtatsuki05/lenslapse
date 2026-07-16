@@ -36,7 +36,7 @@ jobs:
       - name: Run tests
         run: uv run tox
 
-  web:
+  test-web:
     runs-on: ubuntu-latest
     defaults:
       run:

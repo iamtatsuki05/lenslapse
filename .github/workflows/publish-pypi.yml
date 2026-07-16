@@ -9,7 +9,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  test-uv:
     runs-on: ubuntu-latest
     env:
       UV_TORCH_BACKEND: cpu
@@ -29,8 +29,30 @@ jobs:
       - name: Run tests
         run: uv run tox
 
+  # the wheel bundles the web app's shell, so a red web suite must block publishing too
+  test-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Type-check
+        run: npm run typecheck
+      - name: Test
+        run: npm run test
+      - name: Build
+        run: npm run build
+
   publish:
-    needs: test
+    needs: [test-uv, test-web]
     runs-on: ubuntu-latest
     # PyPI Trusted Publishing scopes its OIDC trust to a specific GitHub Environment name;
     # see the one-time setup note in docs/advanced-usage.md before this job's first real run.
