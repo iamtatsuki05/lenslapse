@@ -678,22 +678,27 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     device = next(model.parameters()).device
     t1 = time.time()
     lp = lens_all(model, torch.tensor([ids], device=device)).float().cpu()
-    probs = lp.exp()
-    top = torch.topk(probs, TOPK, dim=-1)
+    # top-k on log-probs directly (exp is monotone, so the indices are identical) — avoids
+    # materializing a full [L+1, T, V] probability tensor just to top-k it. tolist() once,
+    # then index Python lists in the comprehension instead of scalar-indexing the tensor
+    # L*T*K times. Verified identical to the old path on real checkpoints; indices could differ
+    # only when top-k tail probabilities underflow to 0.0 in float32 (ties among prob-0 tokens).
+    top = torch.topk(lp, TOPK, dim=-1)
+    top_idx = top.indices.tolist()
+    top_prob = top.values.exp().tolist()
     t2 = time.time()
 
+    uniq_ids = sorted({i for layer in top_idx for pos in layer for i in pos})
+    id_to_display = {
+        tid: token_display_text(tok, tokstr) for tid, tokstr in zip(uniq_ids, tok.convert_ids_to_tokens(uniq_ids))
+    }
     cells = [
         [
             {
-                "token": token_display_text(tok, tok.convert_ids_to_tokens([int(top.indices[li, t, 0])])[0]),
-                "prob": float(top.values[li, t, 0]),
+                "token": id_to_display[top_idx[li][t][0]],
+                "prob": top_prob[li][t][0],
                 "top": [
-                    [
-                        token_display_text(tok, tok.convert_ids_to_tokens([int(top.indices[li, t, k])])[0]),
-                        float(top.values[li, t, k]),
-                        int(top.indices[li, t, k]),
-                    ]
-                    for k in range(TOPK)
+                    [id_to_display[top_idx[li][t][k]], top_prob[li][t][k], top_idx[li][t][k]] for k in range(TOPK)
                 ],
             }
             for t in range(lp.shape[1])
@@ -707,7 +712,7 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
         ranks = (lp > lp[:, :, tid : tid + 1]).sum(dim=-1) + 1  # [L+1, T]
         tgt[str(tid)] = {
             "token": token_display_text(tok, tok.convert_ids_to_tokens([tid])[0]),
-            "p": [[round(float(x), 6) for x in row] for row in probs[:, :, tid].tolist()],
+            "p": [[round(float(x), 6) for x in row] for row in lp[:, :, tid].exp().tolist()],
             "r": [[int(x) for x in row] for row in ranks.tolist()],
         }
 

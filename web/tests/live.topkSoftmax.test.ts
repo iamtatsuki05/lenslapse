@@ -51,22 +51,45 @@ describe('topkSoftmax', () => {
 })
 
 describe('targetStat', () => {
+  // targetStat now takes the row's softmax normalizers (max, Z) — the same ones topkSoftmax
+  // already computed for that cell. A small helper computes them the standalone way for tests.
+  const normalizers = (data: Float32Array, off: number, V: number): [number, number] => {
+    let max = -Infinity
+    for (let i = 0; i < V; i++) if (data[off + i] > max) max = data[off + i]
+    let Z = 0
+    for (let i = 0; i < V; i++) Z += Math.exp(data[off + i] - max)
+    return [max, Z]
+  }
+
   it('matches a reference softmax and uses strictly-greater rank', () => {
     const data = new Float32Array([1, 3, 2, 3])
-    const Z = [...data].reduce((acc, v) => acc + Math.exp(v - 3), 0)
-    const s0 = targetStat(data, 0, 4, 0)
+    const [max, Z] = normalizers(data, 0, 4)
+    const s0 = targetStat(data, 0, 4, 0, max, Z)
     expect(s0.p).toBeCloseTo(Math.round((Math.exp(1 - 3) / Z) * 1e6) / 1e6, 9)
     expect(s0.r).toBe(4) // three logits are strictly greater
     // ties do not inflate the rank (strictly greater + 1, same as the Python pipeline)
-    expect(targetStat(data, 0, 4, 1).r).toBe(1)
-    expect(targetStat(data, 0, 4, 3).r).toBe(1)
-    expect(targetStat(data, 0, 4, 2).r).toBe(3)
+    expect(targetStat(data, 0, 4, 1, max, Z).r).toBe(1)
+    expect(targetStat(data, 0, 4, 3, max, Z).r).toBe(1)
+    expect(targetStat(data, 0, 4, 2, max, Z).r).toBe(3)
   })
 
   it('respects the row offset', () => {
     const data = new Float32Array([9, 9, 0, 1]) // second row starts at offset 2
-    const s = targetStat(data, 2, 2, 1)
+    const [max, Z] = normalizers(data, 2, 2)
+    const s = targetStat(data, 2, 2, 1, max, Z)
     expect(s.r).toBe(1)
     expect(s.p).toBeCloseTo(Math.exp(1) / (Math.exp(0) + Math.exp(1)), 5)
+  })
+
+  it("reuses topkSoftmax's max/Z and gives the same p as computing them standalone", () => {
+    // the whole point of the shared-normalizer refactor: identical result, no recomputation
+    const data = new Float32Array([0.5, 2.1, -1.3, 3.7, 1.0, 0.2])
+    const cell = topkSoftmax(data, 0, data.length, 3, decode)
+    for (let tid = 0; tid < data.length; tid++) {
+      const shared = targetStat(data, 0, data.length, tid, cell.max, cell.Z)
+      const [max, Z] = normalizers(data, 0, data.length)
+      const standalone = targetStat(data, 0, data.length, tid, max, Z)
+      expect(shared).toEqual(standalone)
+    }
   })
 })
