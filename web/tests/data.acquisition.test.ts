@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { acquisitionMap, diffMap, fmtStep, layerProfileFromShard, nearestStep } from '../src/data'
+import { acquisitionMap, diffMap, fmtStep, layerProfileFromShard, logStepFrac, nearestStep } from '../src/data'
 import { logProb01 } from '../src/color'
 import type { Prompt, Shard } from '../src/data'
 
@@ -41,6 +41,21 @@ describe('fmtStep', () => {
     expect(fmtStep(1000)).toBe('1k')
     expect(fmtStep(2738)).toBe('2.7k')
     expect(fmtStep(143000)).toBe('143k')
+  })
+})
+
+describe('logStepFrac', () => {
+  it('maps steps onto a 0..1 log axis', () => {
+    expect(logStepFrac(0, 143000)).toBe(0)
+    expect(logStepFrac(143000, 143000)).toBeCloseTo(1, 9)
+    const mid = logStepFrac(1000, 143000)
+    expect(mid).toBeGreaterThan(0)
+    expect(mid).toBeLessThan(1)
+  })
+
+  it('never divides by zero at maxStep=0 (steps=[0] on a live sweep or single-checkpoint model)', () => {
+    expect(logStepFrac(0, 0)).toBe(0)
+    expect(Number.isFinite(logStepFrac(0, 0))).toBe(true)
   })
 })
 

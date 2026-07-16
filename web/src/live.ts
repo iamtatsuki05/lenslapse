@@ -50,6 +50,9 @@ export interface ProbeResult {
 // probe server can serve this app itself) and then the default port — a closed local port
 // refuses instantly, so this costs nothing when no server is running. Public (non-localhost)
 // deployments never probe the visitor's machine without explicit opt-in.
+
+/** Where `lenslapse server` listens by default — also the origin shown in copyable snippets. */
+export const DEFAULT_PROBE_ORIGIN = 'http://localhost:8017'
 export function resolveProbeCandidates(): { candidates: string[]; explicit: boolean } {
   const toOrigin = (u: string): string | null => {
     try {
@@ -86,7 +89,7 @@ export function resolveProbeCandidates(): { candidates: string[]; explicit: bool
     /* storage unavailable */
   }
   if (['localhost', '127.0.0.1'].includes(location.hostname)) {
-    return { candidates: [...new Set([location.origin, 'http://localhost:8017'])], explicit: false }
+    return { candidates: [...new Set([location.origin, DEFAULT_PROBE_ORIGIN])], explicit: false }
   }
   return { candidates: [], explicit: false }
 }

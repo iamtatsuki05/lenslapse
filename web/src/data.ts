@@ -171,6 +171,14 @@ export function fmtStep(s: number): string {
   return `${Number.isInteger(k) ? k : Number(k.toFixed(1))}k`
 }
 
+/** A training step's position on a log axis, as a 0..1 fraction of `maxStep`'s position.
+ * The denominator floors at log10(2): a live sweep computes step 0 first and a single-checkpoint
+ * model has steps=[0], and in both cases maxStep=0 would divide by zero and emit NaN into SVG
+ * attributes / CSS `left` — the trajectory chart and the slider ticks share this one fix. */
+export function logStepFrac(step: number, maxStep: number): number {
+  return Math.log10(step + 1) / Math.max(Math.log10(maxStep + 1), Math.log10(2))
+}
+
 /** Allocate a `layers`-long array of empty per-position arrays, ready for `arr[li].push(...)`
  * — the shared shape every per-cell 2D grid below is built from. */
 function grid2D<T>(layers: number): T[][] {

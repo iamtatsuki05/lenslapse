@@ -30,11 +30,11 @@ from pydantic import BaseModel, field_validator
 
 from lenslapse.logging_utils import configure_cli_logging
 from lenslapse.sources import (
+    DEFAULT_STEPS_CSV,
     Mode,
     coerce_fire_csv_arg,
     load_tokenizer,
-    resolve_sources,
-    resolve_subfolder_sources,
+    resolve_all_sources,
     resolve_tokenizer_ref,
 )
 
@@ -59,7 +59,7 @@ class AddModelConfig(BaseModel):
     id: str
     label: str
     models_root: Path
-    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000"
+    steps: str = DEFAULT_STEPS_CSV
     final_only: bool = False
     skip_export: bool = False
     force: bool = False
@@ -76,7 +76,7 @@ def main(
     id: str,
     label: str,
     models_root: str,
-    steps: str = "0,1,2,4,8,16,32,64,128,256,512,1000,2000,4000,8000,16000,32000,64000,128000,143000",
+    steps: str = DEFAULT_STEPS_CSV,
     final_only: bool = False,
     skip_export: bool = False,
     force: bool = False,
@@ -134,11 +134,7 @@ def main(
         if any(m["id"] == cfg.id for m in catalog["models"]) and not cfg.force:
             sys.exit(f"model id {cfg.id!r} is already registered in {models_json}; rerun with --force to overwrite")
 
-    sources = (
-        resolve_subfolder_sources(cfg.model, cfg.subfolder_map)
-        if cfg.subfolder_map
-        else resolve_sources(cfg.model, cfg.steps, cfg.final_only, cfg.revision_template)
-    )
+    sources = resolve_all_sources(cfg.model, cfg.steps, cfg.final_only, cfg.subfolder_map, cfg.revision_template)
     logger.info("%d checkpoint(s): steps %s", len(sources), [s.step for s in sources])
 
     common = ["--model", cfg.model, "--steps", cfg.steps] + (["--final-only"] if cfg.final_only else [])

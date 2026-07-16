@@ -28,7 +28,7 @@ from onnxruntime.quantization import QuantType, quantize_dynamic
 from pydantic import BaseModel, field_validator
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from lenslapse.export_checkpoints import Backbone, build_lens_onnx
+from lenslapse.export_checkpoints import Backbone, build_lens_onnx, export_backbone_onnx
 from lenslapse.logging_utils import configure_cli_logging
 from lenslapse.precompute_lens import PROMPTS, lens_all
 from lenslapse.sources import coerce_fire_csv_arg
@@ -72,19 +72,7 @@ def export_fp32(model: Any, td: Path) -> tuple[Path, Path]:
     mask = torch.ones_like(tok_ids)
     bb_path = Path(td) / "bb.onnx"
     lens_path = Path(td) / "lens.onnx"
-    torch.onnx.export(
-        Backbone(model),
-        (tok_ids, mask),
-        str(bb_path),
-        input_names=["input_ids", "attention_mask"],
-        output_names=["hidden_states"],
-        dynamic_axes={
-            "input_ids": {0: "b", 1: "t"},
-            "attention_mask": {0: "b", 1: "t"},
-            "hidden_states": {1: "b", 2: "t"},
-        },
-        opset_version=18,
-    )
+    export_backbone_onnx(Backbone(model), tok_ids, mask, bb_path)
     build_lens_onnx(model, lens_path)
     return bb_path, lens_path
 
