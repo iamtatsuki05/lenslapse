@@ -181,8 +181,9 @@ def main(
             lp = lens_all(step_model, ids)  # [L+1, T, V] log-probs
             # top-k on log-probs directly (exp is monotone → identical indices), avoiding a full
             # [L+1, T, V] probability tensor. tolist() the top-k once and index Python lists in the
-            # comprehension rather than scalar-indexing the tensor L*T*K times — exact-value
-            # transforms, verified byte-identical to the old exp-then-topk path.
+            # comprehension rather than scalar-indexing the tensor L*T*K times. Verified identical
+            # to the old exp-then-topk path on real checkpoints; indices could differ only when
+            # top-k tail probabilities underflow to 0.0 in float32 (ties among prob-0 tokens).
             top = torch.topk(lp, TOPK, dim=-1)  # values(log-probs)/indices [L+1, T, K]
             top_idx = top.indices.tolist()
             top_prob = top.values.exp().tolist()

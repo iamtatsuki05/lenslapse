@@ -681,7 +681,8 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     # top-k on log-probs directly (exp is monotone, so the indices are identical) — avoids
     # materializing a full [L+1, T, V] probability tensor just to top-k it. tolist() once,
     # then index Python lists in the comprehension instead of scalar-indexing the tensor
-    # L*T*K times; both are exact-value transforms, verified byte-identical to the old path.
+    # L*T*K times. Verified identical to the old path on real checkpoints; indices could differ
+    # only when top-k tail probabilities underflow to 0.0 in float32 (ties among prob-0 tokens).
     top = torch.topk(lp, TOPK, dim=-1)
     top_idx = top.indices.tolist()
     top_prob = top.values.exp().tolist()

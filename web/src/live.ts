@@ -417,15 +417,17 @@ export class LiveEngine {
     const norm: { max: number; Z: number }[][] | null = targets?.length ? [] : null
     for (let li = 0; li < L1; li++) {
       const row: GridCell[] = []
-      const normRow: { max: number; Z: number }[] = []
+      const normRow: { max: number; Z: number }[] | null = norm ? [] : null
       for (let t = 0; t < T; t++) {
         const off = (li * T + t) * V
-        const cell = topkSoftmax(logits.data as Float32Array, off, V, 10, (id) => this.tokenizer!.decode([id]))
+        // strip max/Z off the stored cell: grids are persisted to the IndexedDB probe cache, and
+        // the cached shape must stay identical to the server backend's cells
+        const { max, Z, ...cell } = topkSoftmax(logits.data as Float32Array, off, V, 10, (id) => this.tokenizer!.decode([id]))
         row.push(cell)
-        normRow.push({ max: cell.max, Z: cell.Z })
+        normRow?.push({ max, Z })
       }
       cells.push(row)
-      norm?.push(normRow)
+      if (normRow) norm!.push(normRow)
     }
     let tgt: ProbeResult['tgt']
     if (targets?.length && norm) {

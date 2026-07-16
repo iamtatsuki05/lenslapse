@@ -135,10 +135,14 @@ export class LensGrid {
     const dpr = window.devicePixelRatio || 1
     // assigning canvas.width/height reallocates the backing store and resets all context state,
     // even when the value is unchanged — during playback the grid dimensions are fixed, so only
-    // touch them on an actual size change; clearRect + setTransform below already run every frame
-    if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-      canvas.width = w * dpr
-      canvas.height = h * dpr
+    // touch them on an actual size change; clearRect + setTransform below already run every frame.
+    // Math.trunc matches the IDL unsigned-long coercion a direct assignment would apply, so the
+    // comparison also holds for fractional devicePixelRatio (browser zoom) instead of always failing
+    const bw = Math.trunc(w * dpr)
+    const bh = Math.trunc(h * dpr)
+    if (canvas.width !== bw || canvas.height !== bh) {
+      canvas.width = bw
+      canvas.height = bh
       canvas.style.width = `${w}px`
       canvas.style.height = `${h}px`
     }
