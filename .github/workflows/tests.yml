@@ -9,8 +9,8 @@ on:
 jobs:
   test-uv:
     runs-on: ubuntu-latest
-    env:
-      UV_TORCH_BACKEND: cpu # the CUDA-bundled default wheel drags in multi-GB nvidia deps
+    # CPU-only torch comes from the index pinned in pyproject ([tool.uv.sources]); the
+    # UV_TORCH_BACKEND env var never applied to `uv sync` (uv pip only), so it is not set here.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

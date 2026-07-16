@@ -9,11 +9,12 @@ project = "LensLapse"
 author = "Tatsuki Okada"
 copyright = "2026, Tatsuki Okada"
 
+# no intersphinx: it fetches inventories from docs.python.org at build time, and with
+# --fail-on-warning a network flake on the runner would fail an otherwise-good Pages deploy
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
-    "sphinx.ext.intersphinx",
     "myst_parser",
 ]
 
@@ -28,7 +29,6 @@ autodoc_typehints = "description"
 # here, autodoc finds lenslapse.server in sys.modules and never re-imports fastapi.
 import lenslapse.server  # noqa: E402,F401  (import-not-at-top / unused: needed for its side effect)
 
-intersphinx_mapping = {"python": ("https://docs.python.org/3", None)}
 
 myst_enable_extensions = ["colon_fence"]
 myst_heading_anchors = 3

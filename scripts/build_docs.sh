@@ -7,5 +7,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 uv run --group docs sphinx-apidoc -f -o docs/api src/lenslapse
-uv run --group docs sphinx-build -M html docs docs/_build --fail-on-warning
+# -b (direct mode), NOT -M: make-mode swallows --fail-on-warning's non-zero exit on Sphinx 9.1,
+# printing "warnings treated as errors" while still exiting 0 — the gate would be decorative
+uv run --group docs sphinx-build -b html --fail-on-warning docs docs/_build/html
 echo "docs built at docs/_build/html/index.html"

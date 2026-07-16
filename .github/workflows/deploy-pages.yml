@@ -20,8 +20,8 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    env:
-      UV_TORCH_BACKEND: cpu # Sphinx autodoc imports the package; the CUDA torch wheel is multi-GB
+    # Sphinx autodoc imports the package, so this job syncs the full Python project; the CPU
+    # torch index pinned in pyproject ([tool.uv.sources]) keeps that from pulling CUDA wheels.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

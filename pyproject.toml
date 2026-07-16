@@ -47,6 +47,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://iamtatsuki05.github.io/lenslapse/about/"
+Documentation = "https://iamtatsuki05.github.io/lenslapse/docs/"
 Issues = "https://github.com/iamtatsuki05/lenslapse/issues"
 
 [project.scripts]
@@ -69,6 +70,18 @@ docs = [
 
 [tool.uv]
 default-groups = ["dev"]
+
+# On Linux (= every GitHub Actions job that syncs this project: tests, publish, docs build),
+# PyPI's default torch wheel drags in the multi-GB CUDA stack; nothing here needs a GPU wheel.
+# The UV_TORCH_BACKEND env var does NOT apply to `uv sync`/`uv run` (uv pip only), so the CPU
+# index has to be pinned at resolution time. macOS wheels are CPU-only on PyPI already.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lenslapse"]

@@ -1,6 +1,7 @@
 """Precompute logit-lens data for curated prompts across Pythia training checkpoints.
 
-Output layout (static JSON consumed by the web app):
+Output layout (static JSON consumed by the web app)::
+
   out_dir/index.json   model metadata, step list, prompt catalog (tokens, gold continuation, targets)
   out_dir/p{i}.json    per-prompt shard:
                          vocab: {token_id: token_string} for every id referenced
