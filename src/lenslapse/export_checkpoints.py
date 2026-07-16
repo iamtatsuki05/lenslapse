@@ -196,18 +196,31 @@ def export_source(src: "CheckpointSource", out_dir: Path, tok: Any) -> dict[str,
 
         bb_f16 = step_dir / "backbone.f16.onnx"
         lens_f16 = step_dir / "lens.f16.onnx"
-        save_f16(str(bb_fp32), str(bb_f16))
-        save_f16(str(lens_fp32), str(lens_f16))
+        # write under pending names and promote only after the f16 gate below passes: writing
+        # the final names first meant a failed assert left unvalidated files in the ship
+        # directory under their shippable names — which a later --skip-existing run (the old
+        # manifest still listing this step as passing) would then skip right over
+        bb_f16_pending = step_dir / "backbone.f16.onnx.pending"
+        lens_f16_pending = step_dir / "lens.f16.onnx.pending"
+        save_f16(str(bb_fp32), str(bb_f16_pending))
+        save_f16(str(lens_fp32), str(lens_f16_pending))
 
     # f16 sanity: top-1 must match torch fp32 at every position of the probe
-    sbf = ort.InferenceSession(str(bb_f16))
-    slf = ort.InferenceSession(str(lens_f16))
-    hf = sbf.run(None, {"input_ids": input_ids.numpy(), "attention_mask": attn.numpy()})[0]
-    L1, _, T, H = hf.shape
-    lf = slf.run(None, {"hidden": hf[-1, 0]})[0]
-    f16_diff = float(np.abs(ref_logits - lf).max())
-    top1_match = bool((lf.argmax(-1) == ref_logits.argmax(-1)).all())
-    assert top1_match, f"{rev}: f16 top-1 disagrees with torch on the probe — do not ship this checkpoint"
+    try:
+        sbf = ort.InferenceSession(str(bb_f16_pending))
+        slf = ort.InferenceSession(str(lens_f16_pending))
+        hf = sbf.run(None, {"input_ids": input_ids.numpy(), "attention_mask": attn.numpy()})[0]
+        L1, _, T, H = hf.shape
+        lf = slf.run(None, {"hidden": hf[-1, 0]})[0]
+        f16_diff = float(np.abs(ref_logits - lf).max())
+        top1_match = bool((lf.argmax(-1) == ref_logits.argmax(-1)).all())
+        assert top1_match, f"{rev}: f16 top-1 disagrees with torch on the probe — do not ship this checkpoint"
+    except BaseException:
+        bb_f16_pending.unlink(missing_ok=True)
+        lens_f16_pending.unlink(missing_ok=True)
+        raise
+    bb_f16_pending.replace(bb_f16)
+    lens_f16_pending.replace(lens_f16)
 
     # this is metadata for humans reading the manifest, not something anything parses back, so a
     # lossy decode (bytes, out-of-vocab ids) is fine — see token_display_text's docstring.

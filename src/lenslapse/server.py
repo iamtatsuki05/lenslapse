@@ -67,7 +67,7 @@ from lenslapse.sources import (
     resolve_tokenizer_ref,
     token_display_text,
 )
-from lenslapse.webdata import ensure_data_file, ensure_tokenizer_file
+from lenslapse.webdata import ensure_data_file, ensure_tokenizer_file, safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +190,9 @@ TOKENIZERS: OrderedDict = OrderedDict()  # (tok_ref, tok_revision, tok_subfolder
 # to the cache). One global lock serializes load+forward+write — fine for a batch-1 local server.
 PROBE_LOCK = threading.Lock()
 REG_LOCK = threading.Lock()  # registry mutations + registry-file writes
+TOK_LOCK = (
+    threading.Lock()
+)  # TOKENIZERS check→evict→insert (concurrent misses raced: duplicate loads, KeyError on an emptied dict)
 JOBS: dict = {}  # model id -> {"status": "running|done|failed", "log": deque}; conversions run one at a time
 JOBS_LOCK = threading.Lock()  # guards JOBS check-and-set (endpoints run concurrently in the threadpool)
 PICK_LOCK = threading.Lock()  # at most one native folder dialog at a time
@@ -615,11 +618,12 @@ def tokenize(req: TokenizeRequest) -> TokenizeResponse:
     src = source_for(req.model, steps[-1])
     tok_load_ref, tok_rev, tok_subfolder = resolve_tokenizer_ref(entry.tokenizer_ref, src)
     key = (tok_load_ref, tok_rev, tok_subfolder)
-    if key not in TOKENIZERS:
-        while len(TOKENIZERS) >= 8:
-            TOKENIZERS.popitem(last=False)
-        TOKENIZERS[key] = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
-    tok = TOKENIZERS[key]
+    with TOK_LOCK:
+        if key not in TOKENIZERS:
+            while len(TOKENIZERS) >= 8:
+                TOKENIZERS.popitem(last=False)
+            TOKENIZERS[key] = load_tokenizer(tok_load_ref, tok_rev, tok_subfolder)
+        tok = TOKENIZERS[key]
     # no special tokens: the app tracks the first content token, which must never be a BOS
     ids = tok(req.text, add_special_tokens=False)["input_ids"]
     tokens = [token_display_text(tok, t) for t in tok.convert_ids_to_tokens(ids)]
@@ -771,6 +775,12 @@ def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
     in a checkout (already on disk there) or, for a pip install, from webdata's download cache
     (fetched from GitHub on first request — see lenslapse/webdata.py). Registered ahead of the
     `/` static mount in `main`, so it wins for these paths; unrelated 404s there are unaffected."""
+    # same guard as the download fallback applies to itself: a single ".." segment passes the
+    # router, and only webdata's own validation stood between it and the path join here. It
+    # could only ever reach files the `/` static mount already serves, but the two branches
+    # must not disagree about what a well-formed segment is.
+    if not (safe_segment(model_id) and safe_segment(filename)):
+        raise HTTPException(404, f"no data/{model_id}/{filename}")
     webapp = _webapp_root()
     if webapp is not None:
         bundled = webapp / "data" / model_id / filename
@@ -785,6 +795,8 @@ def get_shipped_model_data(model_id: str, filename: str) -> FileResponse:
 @app.get("/tokenizer/{model_id}/{filename}")
 def get_shipped_model_tokenizer(model_id: str, filename: str) -> FileResponse:
     """A shipped model's tokenizer file, same checkout-vs-cache split as get_shipped_model_data."""
+    if not (safe_segment(model_id) and safe_segment(filename)):
+        raise HTTPException(404, f"no tokenizer/{model_id}/{filename}")
     webapp = _webapp_root()
     if webapp is not None:
         bundled = webapp / "tokenizer" / model_id / filename

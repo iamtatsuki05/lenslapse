@@ -21,8 +21,11 @@ export function setupManageModels(onChange: (serverModels: ServerModel[] | null)
   const dialog = $<HTMLDialogElement>('models-dialog')
   btn.hidden = false
   btn.addEventListener('click', async () => {
-    await renderList()
+    // open first: renderList's per-row poll() (which resumes watching an in-flight conversion)
+    // early-returns while the dialog is closed, so the old await-then-open order meant reopening
+    // the dialog mid-conversion never resumed the progress display
     dialog.showModal()
+    await renderList()
   })
   $('models-close').addEventListener('click', () => dialog.close())
 

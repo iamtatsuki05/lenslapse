@@ -12,6 +12,12 @@ describe('probColor', () => {
     expect(probColor(2)).toEqual(probColor(1))
   })
 
+  it('paints a non-finite probability neutral gray instead of throwing', () => {
+    // a live probe whose logits went NaN must cost one gray cell, not the whole grid render
+    expect(probColor(Number.NaN)).toEqual([128, 128, 128])
+    expect(probColor(Number.POSITIVE_INFINITY)).toEqual([128, 128, 128])
+  })
+
   it('interpolates to integer rgb channels', () => {
     for (const p of [0.1, 0.25, 0.5, 0.9]) {
       const rgb = probColor(p)

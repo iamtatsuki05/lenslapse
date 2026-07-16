@@ -19,6 +19,9 @@ function lerp(a: number, b: number, t: number): number {
 
 /** prob in [0,1] -> rgb array. sqrt scale so low-probability structure stays visible. */
 export function probColor(p: number): Rgb {
+  // a NaN prob (a live probe whose logits went NaN) would index VIRIDIS[NaN] and throw,
+  // killing the whole grid render — paint the one bad cell neutral gray instead
+  if (!Number.isFinite(p)) return [128, 128, 128]
   const t = Math.sqrt(Math.min(Math.max(p, 0), 1)) * (VIRIDIS.length - 1)
   const i = Math.min(Math.floor(t), VIRIDIS.length - 2)
   const f = t - i
