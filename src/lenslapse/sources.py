@@ -1,6 +1,7 @@
 """Resolve a model source into (load_ref, revision, step) tuples for export/precompute.
 
-Four source shapes are supported:
+Four source shapes are supported::
+
   1. Hub suite     : --model EleutherAI/pythia-70m --steps 0,1000,...   -> revisions step{N}
   2. Hub single    : --model gpt2 --final-only                          -> revision main, step 0
   3. Local dir     : --model /path/to/run --local-checkpoints           -> checkpoint-*/ subdirs
@@ -129,7 +130,7 @@ def resolve_tokenizer_ref(tokenizer_ref: str | None, fallback: CheckpointSource)
     (load_ref, revision, subfolder) ready to splat into AutoTokenizer.from_pretrained(...).
 
     A --tokenizer-ref override is for repos where the per-checkpoint tokenizer files don't load
-    cleanly (bigscience/bloom-*-intermediate, a transformers-version incompatibility) or live in a
+    cleanly (``bigscience/bloom-*-intermediate``, a transformers-version incompatibility) or live in a
     separate repo entirely (m-a-p/neo_scalinglaw_*, whose tokenizer is only published under
     m-a-p/neo_7b) — always safe when it applies, since the tokenizer is identical across
     checkpoints of the same pretraining run.

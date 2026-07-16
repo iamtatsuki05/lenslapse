@@ -61,6 +61,11 @@ dev = [
     "httpx>=0.27",
     "tox>=4.21.2",
 ]
+docs = [
+    "sphinx>=8.1",
+    "furo>=2024.8",
+    "myst-parser>=4.0",
+]
 
 [tool.uv]
 default-groups = ["dev"]

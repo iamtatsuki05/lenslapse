@@ -8,6 +8,7 @@
 - **Project page:** https://iamtatsuki05.github.io/lenslapse/about/
 - **Converted checkpoints (HF):** https://huggingface.co/iamtatsuki05/lenslapse-onnx
 - **Demo video:** https://www.youtube.com/watch?v=OBnvG9Ru3j8
+- **Documentation:** https://iamtatsuki05.github.io/lenslapse/docs/ (guides + API reference)
 
 ![Clicking play scrubs the whole slider automatically: the grid crystallizes from noise into "Tokyo," layer by layer.](docs/assets/readme-playback.gif)
 
@@ -74,7 +75,8 @@ Key property: `lens(hidden[-1]) == model logits` **exactly** (validated per chec
 See [`docs/advanced-usage.md`](docs/advanced-usage.md) for: local development setup, converting
 checkpoints & precomputing lens data, adding your own model (Hub or local), running the local
 probe server for heavy models, scripting every feature from the CLI, probe reproducibility, and
-benchmarking.
+benchmarking. The same guides plus a full API reference are rendered at
+https://iamtatsuki05.github.io/lenslapse/docs/.
 
 ## Deploy (zero cost)
 

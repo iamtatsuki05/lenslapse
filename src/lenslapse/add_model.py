@@ -4,7 +4,8 @@ Runs the full pipeline for a new model — export ONNX pairs, precompute lens sh
 tokenizer for the web app, and register the model in web/public/data/models.json — so that adding
 a model is a data change, not a code change.
 
-Supported sources (see sources.py):
+Supported sources (see sources.py)::
+
   Hub suite    : python add_model.py --model EleutherAI/pythia-31m --id pythia-31m --label "Pythia 31M" \
                      --steps 0,512,8000,143000 --models-root /path/to/models
   Hub single   : python add_model.py --model gpt2 --id gpt2 --label "GPT-2 124M" --final-only ...
@@ -93,7 +94,7 @@ def main(
         id: model id used by the app (directory name).
         label: display name in the model picker.
         models_root: directory that holds <id>/step*/... for the model host.
-        steps: hub suites only; local Trainer dirs always use every checkpoint-* they contain.
+        steps: hub suites only; local Trainer dirs always use every ``checkpoint-*`` they contain.
         final_only: single checkpoint (revision "main") instead of a step suite.
         skip_export: only precompute + register.
         force: overwrite an id that is already registered.
@@ -101,7 +102,7 @@ def main(
             one revision instead of using git revisions per checkpoint; overrides `steps`.
         prompts_file: JSON curated-prompt list; see precompute_lens.py.
         revision_template: revision naming for hub suites, e.g. "global_step{}" for
-            bigscience/bloom-*-intermediate.
+            ``bigscience/bloom-*-intermediate``.
         tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights; see
             export_checkpoints.py.
     """

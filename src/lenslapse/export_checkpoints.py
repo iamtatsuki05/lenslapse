@@ -1,11 +1,14 @@
 """Export Pythia training checkpoints as browser-runnable ONNX pairs (backbone + lens head).
 
-For each requested training step, produces:
+For each requested training step, produces::
+
   out_dir/step{N}/backbone.f16.onnx  input_ids, attention_mask -> hidden_states [L+1, B, T, H] (pre-ln_f, uniform)
   out_dir/step{N}/lens.f16.onnx      hidden [N, H] -> logits [N, V]  (final_layer_norm + unembedding)
+
 and a top-level manifest.json.
 
 Design notes (validated 2026-07-13, see experiments/feasibility-note.md):
+
 - HF GPTNeoX applies final_layer_norm to the last entry of output_hidden_states, so a uniform lens
   head would double-normalize it. Forward hooks capture each block's raw (pre-ln) output instead;
   lens(hidden[-1]) then equals the model's logits exactly.
@@ -291,10 +294,10 @@ def main(
         subfolder_map: "step:path,step:path,..." for repos that nest checkpoints as subfolders of
             one revision instead of using git revisions per checkpoint; overrides `steps`.
         revision_template: revision naming for hub suites, e.g. "global_step{}" for
-            bigscience/bloom-*-intermediate.
+            ``bigscience/bloom-*-intermediate``.
         tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights, as
             "repo_id" or "repo_id@revision" — for repos where the per-checkpoint tokenizer files
-            do not load cleanly (bigscience/bloom-*-intermediate) or live in a separate repo
+            do not load cleanly (``bigscience/bloom-*-intermediate``) or live in a separate repo
             entirely (m-a-p/neo_scalinglaw_*, whose tokenizer is only published under
             m-a-p/neo_7b). The tokenizer is identical across checkpoints of the same pretraining
             run, so this is always safe when it applies.

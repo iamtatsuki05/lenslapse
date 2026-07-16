@@ -138,7 +138,7 @@ def main(
         prompts_file: JSON file with the same shape as PROMPTS (list of {text, gold, story});
             defaults to the built-in English curated set.
         revision_template: revision naming for hub suites, e.g. "global_step{}" for
-            bigscience/bloom-*-intermediate.
+            ``bigscience/bloom-*-intermediate``.
         tokenizer_ref: load the tokenizer from a different ref than the checkpoint weights, as
             "repo_id" or "repo_id@revision"; see export_checkpoints.py.
     """
