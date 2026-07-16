@@ -25,7 +25,7 @@
 | OPT | 125M | final checkpoint | English |
 | Gemma 3 | 270M | final checkpoint | Multilingual |
 
-Switchable in the header, each labeled by its documented language support ("Multilingual", "Chinese/English", or untagged for English-only) and offering only the curated prompts it can actually handle. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, Mistral-style RMSNorm, and Gemma-style plus-one-weight RMSNorm models all pass the parity check — see `lenslapse/check_arch_parity.py`); a layout the generic heuristic can't reach registers an explicit override in one line via `register_architecture()` (`lenslapse/arch.py`), without touching the resolver itself. `opt-125m` and `gemma3-270m` carry non-Apache-2.0/MIT licenses — see `docs/model-card.md` before redistributing or deploying them.
+Switchable in the header, each labeled by its documented language support ("Multilingual", "Chinese/English", or untagged for English-only) and offering only the curated prompts it can actually handle. The recipe itself is architecture-generic (GPT-NeoX, GPT-2, Llama-style RMSNorm, Mistral-style RMSNorm, and Gemma-style plus-one-weight RMSNorm models all pass the parity check — see `src/lenslapse/check_arch_parity.py`); a layout the generic heuristic can't reach registers an explicit override in one line via `register_architecture()` (`src/lenslapse/arch.py`), without touching the resolver itself. `opt-125m` and `gemma3-270m` carry non-Apache-2.0/MIT licenses — see `docs/model-card.md` before redistributing or deploying them.
 
 ## Highlights
 
@@ -57,17 +57,17 @@ run `scripts/bundle_webapp.sh` after changing `web/` to refresh the packaged she
 
 ```
 Pythia checkpoint (HF Hub, revision step{N})
-   └─ lenslapse/export_checkpoints.py
+   └─ src/lenslapse/export_checkpoints.py
         ├─ backbone.f16.onnx   input_ids → hidden states [L+1, T, H]   (pre-ln, uniform; via forward hooks)
         └─ lens.f16.onnx       hidden [N, H] → logits [N, V]           (final_layer_norm + unembedding)
-   └─ lenslapse/precompute_lens.py → static JSON shards (top-10 per cell + exact target trajectories)
+   └─ src/lenslapse/precompute_lens.py → static JSON shards (top-10 per cell + exact target trajectories)
 
 web/ (Vite, TypeScript)
    ├─ precomputed mode: fetch JSON shard → canvas grid + SVG trajectories (no model download)
    └─ live mode: onnxruntime-web (WebGPU→WASM fallback) + @huggingface/transformers tokenizer
 ```
 
-Key property: `lens(hidden[-1]) == model logits` **exactly** (validated per checkpoint at export). Weights are stored fp16 and cast to fp32 at session load; dynamic int8 was rejected because its final-layer top-1 agreement with fp32 drops to 52% (per-tensor; 71% per-channel) at late checkpoints (see `lenslapse/fidelity_eval.py`).
+Key property: `lens(hidden[-1]) == model logits` **exactly** (validated per checkpoint at export). Weights are stored fp16 and cast to fp32 at session load; dynamic int8 was rejected because its final-layer top-1 agreement with fp32 drops to 52% (per-tensor; 71% per-channel) at late checkpoints (see `src/lenslapse/fidelity_eval.py`).
 
 ## Advanced usage
 

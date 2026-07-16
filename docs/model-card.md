@@ -87,7 +87,7 @@ exposed real gaps in the conversion recipe rather than just confirming it:
   attribute heuristic with no code change.
 - **OPT did not**: its decoder stack sits at `model.model.decoder`, two attribute hops below
   `model`, which the previous one-hop-only base search could not reach (`no block list found on
-  OPTModel`); `lenslapse/arch.py` now resolves dotted multi-hop base paths, verified against OPT and
+  OPTModel`); `src/lenslapse/arch.py` now resolves dotted multi-hop base paths, verified against OPT and
   regression-checked against every other shipped architecture. **`opt-125m/` carries a
   non-permissive, non-commercial license — see License below before using it.**
 - **Gemma 3 did not either**: its RMSNorm computes `normalized(x) * (1 + weight)`, not the
@@ -109,7 +109,7 @@ identity — and the export pipeline's per-checkpoint assertion of it — holds 
 Aquila's, SmolLM2's, and Qwen3's Llama/Mistral-style RMSNorm architectures, Gemma 3's
 plus-one-weight RMSNorm variant, and BLOOM's and OPT's GPT-2-style LayerNorm architectures: the
 conversion recipe introspects the decoder stack, final norm, and unembedding generically
-(`lenslapse/arch.py`) rather than hard-coding Pythia's GPT-NeoX layout.
+(`src/lenslapse/arch.py`) rather than hard-coding Pythia's GPT-NeoX layout.
 
 Two further caveats the recipe does *not* paper over, both caught rather than silently shipped:
 Gemma-2-style models (unlike Gemma 3) apply an additional `tanh`-based final-logit softcapping the
@@ -129,7 +129,7 @@ top-1 lens predictions agree on 100.0% of (layer, position) cells over a 16-prom
 8000/64000/143000; the export-time probe over all 20 checkpoints shows a max logit diff of 0.0087.
 Dynamic int8 quantization was evaluated and rejected (final-layer top-1 agreement drops to 52%
 per-tensor / 71% per-channel at step 143000). See the LensLapse repository for the evaluation
-script (`lenslapse/fidelity_eval.py`).
+script (`src/lenslapse/fidelity_eval.py`).
 
 MAP-Neo, Aquila, BLOOM, SmolLM2, Qwen3, OPT, and Gemma 3 were validated with the same per-checkpoint
 export-time assertion (not the separate 16-prompt/int8 sweep above, which is Pythia-specific):
@@ -150,8 +150,8 @@ MAP-Neo and Aquila publish checkpoints as subfolders within a single revision ra
 revision per checkpoint, Aquila's tokenizer requires `trust_remote_code`, and BLOOM's per-revision
 tokenizer files fail to load under current `transformers` (a `transformers`-side regression, not a
 BLOOM error — its tokenizer is loaded from the final `bigscience/bloom-560m` repo instead, identical
-across checkpoints of the same run); see `lenslapse/sources.py`'s `resolve_subfolder_sources` /
-`--subfolder-map`, `--revision-template`, `--tokenizer-ref`, and `lenslapse/prompts_zh_en.json` (the
+across checkpoints of the same run); see `src/lenslapse/sources.py`'s `resolve_subfolder_sources` /
+`--subfolder-map`, `--revision-template`, `--tokenizer-ref`, and `src/lenslapse/prompts_zh_en.json` (the
 combined English + Chinese curated-prompt set used for MAP-Neo, Aquila, and BLOOM as well as the
 architecture-coverage examples Qwen3 and Gemma 3 — five multilingual-capable models in total, in
 place of the English-only default used by the other six) for the exact commands.

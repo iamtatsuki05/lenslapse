@@ -41,7 +41,7 @@ from lenslapse.sources import (
 logger = logging.getLogger(__name__)
 
 # present in a repo checkout; absent when the package was pip-installed
-WEB = Path(__file__).resolve().parent.parent / "web"
+WEB = Path(__file__).resolve().parent.parent.parent / "web"
 
 
 def run(module: str, args: list[str]) -> None:

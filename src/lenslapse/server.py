@@ -725,10 +725,10 @@ def _probe_locked(req: ProbeRequest, src: CheckpointSource, cache_file: Path) ->
     return result
 
 
-# In a repo checkout, server state stays under src/server/ where it has always lived; from a
-# pip install (no web/ checkout next to the package) it goes to ~/.lenslapse/ instead of
-# writing into site-packages.
-_PKG_PARENT = Path(__file__).resolve().parent.parent
+# In a repo checkout, server state stays under the repo's own server/ dir where it has always
+# lived; from a pip install (no web/ checkout next to the package) it goes to ~/.lenslapse/
+# instead of writing into site-packages.
+_PKG_PARENT = Path(__file__).resolve().parent.parent.parent
 _IN_REPO = (_PKG_PARENT / "web" / "public" / "data").is_dir()
 _STATE_HOME = _PKG_PARENT / "server" if _IN_REPO else Path.home() / ".lenslapse"
 

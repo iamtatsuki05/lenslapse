@@ -7,7 +7,21 @@ name = "lenslapse"
 version = "0.1.0"
 description = "In-browser logit lens over training checkpoints: conversion pipeline and local probe server"
 authors = [{ name = "Tatsuki Okada", email = "tatsukio0522@gmail.com" }]
+license = { file = "LICENSE" }
+readme = "README.md"
 requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+keywords = ["interpretability", "logit-lens", "llm", "training-dynamics", "onnx", "mechanistic-interpretability"]
 dependencies = [
     "torch>=2.13",
     # <5: transformers v5's LlamaTokenizer overrides the checkpoint's own tokenizer definition
@@ -31,6 +45,10 @@ dependencies = [
     "fire>=0.7.1",
 ]
 
+[project.urls]
+Homepage = "https://iamtatsuki05.github.io/lenslapse/about/"
+Issues = "https://github.com/iamtatsuki05/lenslapse/issues"
+
 [project.scripts]
 lenslapse = "lenslapse.cli:main"
 
@@ -48,7 +66,7 @@ dev = [
 default-groups = ["dev"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["lenslapse"]
+packages = ["src/lenslapse"]
 
 # the web app's precomputed shards and tokenizers live in web/public (tracked in git);
 # bundling them next to the committed app shell makes `lenslapse server` fully self-contained

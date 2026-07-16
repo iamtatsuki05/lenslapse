@@ -60,7 +60,7 @@ tokenizer, and registers the model in `models.json` — adding a model is a data
 change. Architectures are resolved generically (GPT-NeoX / GPT-2 / Llama-style RMSNorm / Mistral-style
 RMSNorm / Gemma-style plus-one-weight RMSNorm verified). A layout the generic heuristic can't reach
 (e.g. a decoder nested more attribute hops deep than usual, like OPT's) doesn't need a code change
-either — `register_architecture(model_type, base_path, ...)` in `lenslapse/arch.py` registers an
+either — `register_architecture(model_type, base_path, ...)` in `src/lenslapse/arch.py` registers an
 explicit override for that model's own `config.model_type`, which then replaces the generic guess
 entirely for that architecture rather than blending with it, so a wrong override fails loudly
 instead of silently shipping a wrong lens.
