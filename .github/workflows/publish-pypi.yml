@@ -37,12 +37,13 @@ jobs:
     environment: pypi
     permissions:
       id-token: write # Trusted Publishing (OIDC) -- no PyPI API token/secret needed
-    env:
-      UV_TORCH_BACKEND: cpu # the version-check step's `uv run` still syncs the project first;
-      # without this it pulls the multi-GB CUDA-bundled torch on every push, published or not
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -50,7 +51,10 @@ jobs:
       - name: Check whether this version is already on PyPI
         id: check
         run: |
-          VERSION=$(uv run python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          # plain python3, not `uv run`: reading a TOML field needs no project dependency synced
+          # at all, and `uv run` insists on syncing the full project (torch et al.) first even
+          # with UV_TORCH_BACKEND=cpu set -- multiple GB for a one-line stdlib parse.
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           status=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/lenslapse/$VERSION/json")
           if [ "$status" = "200" ]; then
