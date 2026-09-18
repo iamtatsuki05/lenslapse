@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.5.0",
+    "@huggingface/transformers": "^4.3.0",
     "jspdf": "^4.2.1",
     "onnxruntime-web": "^1.22.0"
   },
