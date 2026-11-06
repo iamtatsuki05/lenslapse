@@ -10,7 +10,7 @@
     />
     <meta
       name="description"
-      content="LensLapse: an in-browser logit lens for interactive exploration of language model training dynamics."
+      content="LensLapse: in-browser logit lens for interactive exploration of language model training dynamics (AACL-IJCNLP 2026 System Demonstrations)."
     />
     <title>LensLapse — project page</title>
     <link rel="stylesheet" crossorigin href="../assets/about-DUmNoZfW.css">
@@ -19,15 +19,19 @@
     <div class="page">
       <header class="hero">
         <div class="logo" aria-hidden="true">⧖</div>
-        <h1>LensLapse: An In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics</h1>
+        <h1>LensLapse: In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics</h1>
         <p class="authors">Tatsuki Okada · Yusuke Sakai · Taro Watanabe</p>
         <p class="affiliation">Nara Institute of Science and Technology (NAIST), Japan</p>
+        <p class="venue">AACL-IJCNLP 2026 · System Demonstrations</p>
         <p class="tagline">
           Scrub across Pythia's public training checkpoints and watch next-token predictions crystallize from noise
           into knowledge — layer by layer, with zero backend.
         </p>
         <div class="actions">
           <a class="action-btn primary" href="../">🚀 Live Demo</a>
+          <a class="action-btn" href="https://aclanthology.org/2026.aacl-demo.9/" target="_blank" rel="noopener"
+            >📄 Paper</a
+          >
           <a class="action-btn" href="https://github.com/iamtatsuki05/lenslapse" target="_blank" rel="noopener"
             >💻 Code</a
           >
@@ -54,17 +58,27 @@
         <div class="abstract">
           <p>
             The logit lens is a standard mechanistic interpretability tool for inspecting a Transformer's
-            predictions across layers. However, existing logit lens tools are limited to analyzing a single trained
-            model and are not designed for interactive exploration of a model's <em>training history</em>. We
-            present <strong>LensLapse</strong>, an open-source web application for interactive exploration of a
-            model's training history through token-level interpretability. Users can scrub a slider across public
-            checkpoints from five model families and three multilingual checkpoint suites and observe how per-layer,
-            per-position logit lens predictions evolve from frequency bias to factual knowledge. Arbitrary user
-            prompts are probed <em>live in the browser</em> via WebGPU/WASM ONNX inference over per-checkpoint model
-            pairs. No server, no API key, no hosting cost, and prompts never leave the user's device. Moreover,
-            <strong>LensLapse</strong> supports local models. A single <code>pip install</code> easily launches the
-            application, allowing users to explore their own models and training checkpoints without any additional
-            web setup. LensLapse is MIT-licensed and permanently hosted at
+            predictions across layers. However, existing logit lens tools typically focus on individual checkpoints
+            rather than interactive exploration of a model's <em>training history</em>.
+          </p>
+          <p>
+            In this study, we introduce <strong>LensLapse</strong>, an open-source web application for interactive
+            exploration of a model's training history through token-level interpretability. Users can scrub a slider
+            across public checkpoints from five model families and three multilingual checkpoint suites and observe
+            how per-layer, per-position logit lens predictions evolve from frequency bias to factual knowledge.
+          </p>
+          <p>
+            For browser-compatible models, arbitrary user prompts are probed <em>live in the browser</em> via local
+            inference over per-checkpoint model pairs. No server, no API key, no hosting cost, and prompts never
+            leave the user's device.
+          </p>
+          <p>
+            Moreover, <strong>LensLapse</strong> supports local models. A single <code>pip install</code> enables
+            users to launch the application and explore their own models and training checkpoints without any
+            additional web setup.
+          </p>
+          <p>
+            LensLapse is MIT-licensed and permanently hosted at
             <a href="https://iamtatsuki05.github.io/lenslapse/">iamtatsuki05.github.io/lenslapse</a>.
           </p>
         </div>
@@ -87,7 +101,7 @@
             <h3>Fully in-browser, zero backend</h3>
             <p>
               Free-text prompts run via onnxruntime-web (WebGPU, with WASM fallback) or an optional local probe
-              server — one click now probes every checkpoint automatically, so ▶ playback works for anything you
+              server — one click probes every checkpoint automatically, so ▶ playback works for anything you
               type, just like the curated prompts. A static site plus versioned weights on the HF Hub means
               unlimited concurrent users at zero hosting cost — the demo cannot rot.
             </p>
@@ -200,11 +214,21 @@ browser (static site, no backend)
       <section id="bibtex">
         <h2>BibTeX</h2>
         <pre>
-@misc{okada2026lenslapse,
-  title  = {LensLapse: An In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics},
-  author = {Tatsuki Okada and Yusuke Sakai and Taro Watanabe},
-  year   = {2026},
-  url    = {https://github.com/iamtatsuki05/lenslapse}
+@inproceedings{okada-etal-2026-lenslapse,
+    title = "{L}ens{L}apse: In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics",
+    author = "Okada, Tatsuki  and
+      Sakai, Yusuke  and
+      Watanabe, Taro",
+    editor = "Zhang, Ningyu  and
+      Wijaya, Derry",
+    booktitle = "Proceedings of the 15th International Joint Conference on Natural Language Processing and the 5th Conference of the {A}sia-Pacific Chapter of the {A}ssociation for {C}omputational {L}inguistics: System Demonstrations",
+    month = nov,
+    year = "2026",
+    address = "Hengqin, China",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.aacl-demo.9/",
+    pages = "66--73",
+    ISBN = "979-8-89176-441-5"
 }</pre
         >
       </section>
@@ -219,7 +243,8 @@ browser (static site, no backend)
           before redistributing or deploying any of the three.
         </p>
         <p>
-          <a href="../">Live Demo</a> · <a href="https://github.com/iamtatsuki05/lenslapse">GitHub</a> ·
+          <a href="../">Live Demo</a> · <a href="https://aclanthology.org/2026.aacl-demo.9/">Paper</a> ·
+          <a href="https://github.com/iamtatsuki05/lenslapse">GitHub</a> ·
           <a href="https://www.youtube.com/watch?v=OBnvG9Ru3j8">YouTube</a> · <a href="../docs/">Docs</a>
         </p>
       </footer>

@@ -87,6 +87,17 @@ code {
   margin: 0;
 }
 
+.hero .venue {
+  display: inline-block;
+  margin: 14px 0 0;
+  padding: 3px 14px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
 .hero .tagline {
   color: var(--text-dim);
   max-width: 60ch;
