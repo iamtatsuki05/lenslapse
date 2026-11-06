@@ -17,7 +17,7 @@
 
 | Model | Params | Checkpoints | Languages |
 |---|---|---|---|
-| Pythia 14M / 70M / 160M | 14M–160M | 20 training steps each | English |
+| Pythia 14M / 70M / 160M | 14M–160M | 38 training steps (14M/70M) or 20 (160M) for curated prompts; 20 each for live probing | English |
 | GPT-2 | 124M | final checkpoint | English |
 | MAP-Neo | 250M | 8 training steps (Hub subfolders) | Chinese/English |
 | BAAI Aquila | 135M | 6 training steps (Hub subfolders) | Chinese/English |
@@ -33,7 +33,7 @@ Switchable in the header, each labeled by its documented language support ("Mult
 
 - **One-click figure export**: the current view (grid + trajectory + metadata) downloads as a publication-ready PNG (3× pixel density) or PDF.
 - Curated prompts are **instant**: logit-lens grids across training checkpoints are precomputed (fp32) and served as static JSON.
-- Free-text prompts run **live**, in your browser or on a connected probe server: one click probes every checkpoint automatically (not just the current one), so the same ▶ playback that animates curated prompts works for anything you type, and comparing two models falls back to a live probe when one of them has no precomputed match for the prompt — your prompt never leaves your device unless a probe server is connected. MAP-Neo and Aquila's tokenizers rely on custom Python code with no browser-compatible fast-tokenizer equivalent, so free-text live probing those two specifically needs a connected probe server; their curated prompts are unaffected.
+- Free-text prompts run **live**, in your browser or on a connected probe server: one click probes every checkpoint automatically, so the same ▶ playback that animates curated prompts works for anything you type, and comparing two models falls back to a live probe when one of them has no precomputed match for the prompt — your prompt never leaves your device unless a probe server is connected. MAP-Neo and Aquila's tokenizers rely on custom Python code with no browser-compatible fast-tokenizer equivalent, so free-text live probing those two specifically needs a connected probe server; their curated prompts are unaffected.
 
 ## Quick start: probe your own models (no checkout needed)
 
