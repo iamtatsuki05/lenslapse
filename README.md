@@ -4,6 +4,7 @@
 
 ![The LensLapse interface: logit-lens grid, training-step slider, and trajectory panel for "The capital of Japan is the city of," at step 8,000 — "Tokyo" flashes in and out of the top-1 slot as training progresses.](docs/assets/readme-hero.png)
 
+- **Paper (AACL-IJCNLP 2026 System Demonstrations):** https://aclanthology.org/2026.aacl-demo.9/ — see [Citation](#citation)
 - **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
 - **Project page:** https://iamtatsuki05.github.io/lenslapse/about/
 - **Converted checkpoints (HF):** https://huggingface.co/iamtatsuki05/lenslapse-onnx
@@ -83,6 +84,29 @@ https://iamtatsuki05.github.io/lenslapse/docs/.
 1. Upload the converted models to a public Hugging Face model repo and set `HF_DEFAULT` in `web/src/live.ts`.
 2. `npm run build`, publish `web/dist/` to GitHub Pages (workflow in `.github/workflows/deploy-pages.yml`).
 3. There is no step 3 — no server, no keys, no bills. See `docs/deployment.md`.
+
+## Citation
+
+If you use LensLapse, please cite our AACL-IJCNLP 2026 System Demonstrations paper:
+
+```bibtex
+@inproceedings{okada-etal-2026-lenslapse,
+    title = "{L}ens{L}apse: In-Browser Logit Lens for Interactive Exploration of Language Model Training Dynamics",
+    author = "Okada, Tatsuki  and
+      Sakai, Yusuke  and
+      Watanabe, Taro",
+    editor = "Zhang, Ningyu  and
+      Wijaya, Derry",
+    booktitle = "Proceedings of the 15th International Joint Conference on Natural Language Processing and the 5th Conference of the {A}sia-Pacific Chapter of the {A}ssociation for {C}omputational {L}inguistics: System Demonstrations",
+    month = nov,
+    year = "2026",
+    address = "Hengqin, China",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.aacl-demo.9/",
+    pages = "66--73",
+    ISBN = "979-8-89176-441-5"
+}
+```
 
 ## License
 
