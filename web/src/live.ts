@@ -375,7 +375,9 @@ export class LiveEngine {
       // a full sweep now calls this once per checkpoint (see runSweep in main.ts) instead of once
       // per click — an unresponsive server used to strand a single probe; it would now strand
       // the whole sweep, disabling the "Live probe" button with no way back short of a reload.
-      signal: AbortSignal.timeout(60000),
+      // Still an hour, not a minute: the first probe of an uncached checkpoint downloads its
+      // weights from the Hub inside this request (pythia-160m: 649 MB, ~54 min at 0.2 MB/s).
+      signal: AbortSignal.timeout(3600000),
     })
     if (!res.ok) throw new Error(`probe server: ${res.status} ${(await res.text()).slice(0, 120)}`)
     const r = await res.json()
