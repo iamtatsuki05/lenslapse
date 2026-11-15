@@ -46,8 +46,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://iamtatsuki05.github.io/lenslapse/about/"
-Documentation = "https://iamtatsuki05.github.io/lenslapse/docs/"
+Homepage = "https://lenslapse.iamtatsuki05.com/about/"
+Documentation = "https://lenslapse.iamtatsuki05.com/docs/"
 Issues = "https://github.com/iamtatsuki05/lenslapse/issues"
 
 [project.scripts]

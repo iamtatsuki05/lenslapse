@@ -155,7 +155,7 @@ execution providers (WebGPU/WASM), emulated CPU throttling, model sizes, and pro
 ## Building the docs
 
 The documentation site (these guides plus a Sphinx-autodoc API reference, deployed at
-<https://iamtatsuki05.github.io/lenslapse/docs/>) builds with:
+<https://lenslapse.iamtatsuki05.com/docs/>) builds with:
 
 ```bash
 sh scripts/build_docs.sh   # regenerates docs/api/ from src/lenslapse, renders docs/_build/html
