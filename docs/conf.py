@@ -1,7 +1,7 @@
 """Sphinx configuration for the LensLapse documentation site.
 
 Built by scripts/build_docs.sh (sphinx-apidoc regenerates docs/api/ from src/lenslapse first)
-and deployed under https://iamtatsuki05.github.io/lenslapse/docs/ by deploy-pages.yml. The
+and deployed under https://lenslapse.iamtatsuki05.com/docs/ by deploy-pages.yml. The
 existing Markdown guides in this directory are included as-is via myst-parser.
 """
 

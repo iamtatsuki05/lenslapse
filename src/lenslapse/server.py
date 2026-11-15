@@ -878,7 +878,7 @@ def main(
         app_url = f"http://{display_host}:{cfg.port}/"
         logger.info("probe server + web app ready — open %s", app_url)
     else:
-        app_url = f"https://iamtatsuki05.github.io/lenslapse/?probe=http://{display_host}:{cfg.port}"
+        app_url = f"https://lenslapse.iamtatsuki05.com/?probe=http://{display_host}:{cfg.port}"
         logger.info("probe server ready (no local web bundle) — open %s", app_url)
     if cfg.open:
         threading.Timer(1.5, webbrowser.open, [app_url]).start()

@@ -27,7 +27,7 @@ Browser-runnable ONNX conversions of 20 log-spaced **training checkpoints** each
 [EleutherAI/pythia-14m](https://huggingface.co/EleutherAI/pythia-14m),
 [pythia-70m](https://huggingface.co/EleutherAI/pythia-70m), and
 [pythia-160m](https://huggingface.co/EleutherAI/pythia-160m), packaged for the
-[LensLapse](https://iamtatsuki05.github.io/lenslapse/) in-browser logit-lens demo. The remaining
+[LensLapse](https://lenslapse.iamtatsuki05.com/) in-browser logit-lens demo. The remaining
 directories are single-checkpoint (final-weights-only) examples that demonstrate the same
 architecture-generic conversion recipe on models the flagship Pythia suite says nothing about —
 three multilingual suites and, separately, four more decoder architecture families that don't
@@ -35,7 +35,7 @@ otherwise change the recipe's own claim (see Contents below for the full list an
 each one).
 
 - **Code:** https://github.com/iamtatsuki05/lenslapse
-- **Project page:** https://iamtatsuki05.github.io/lenslapse/about/
+- **Project page:** https://lenslapse.iamtatsuki05.com/about/
 - **Demo video:** https://www.youtube.com/watch?v=OBnvG9Ru3j8
 
 ## Contents

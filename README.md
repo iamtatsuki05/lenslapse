@@ -5,11 +5,11 @@
 ![The LensLapse interface: logit-lens grid, training-step slider, and trajectory panel for "The capital of Japan is the city of," at step 8,000 — "Tokyo" flashes in and out of the top-1 slot as training progresses.](docs/assets/readme-hero.png)
 
 - **Paper (AACL-IJCNLP 2026 System Demonstrations):** https://aclanthology.org/2026.aacl-demo.9/ — see [Citation](#citation)
-- **Live demo:** https://iamtatsuki05.github.io/lenslapse/ (works in any modern browser; WebGPU used when available, WASM otherwise)
-- **Project page:** https://iamtatsuki05.github.io/lenslapse/about/
+- **Live demo:** https://lenslapse.iamtatsuki05.com/ (works in any modern browser; WebGPU used when available, WASM otherwise)
+- **Project page:** https://lenslapse.iamtatsuki05.com/about/
 - **Converted checkpoints (HF):** https://huggingface.co/iamtatsuki05/lenslapse-onnx
 - **Demo video:** https://www.youtube.com/watch?v=OBnvG9Ru3j8
-- **Documentation:** https://iamtatsuki05.github.io/lenslapse/docs/ (guides + API reference)
+- **Documentation:** https://lenslapse.iamtatsuki05.com/docs/ (guides + API reference)
 
 ![Clicking play scrubs the whole slider automatically: the grid crystallizes from noise into "Tokyo," layer by layer.](docs/assets/readme-playback.gif)
 
@@ -77,7 +77,7 @@ See [`docs/advanced-usage.md`](docs/advanced-usage.md) for: local development se
 checkpoints & precomputing lens data, adding your own model (Hub or local), running the local
 probe server for heavy models, scripting every feature from the CLI, probe reproducibility, and
 benchmarking. The same guides plus a full API reference are rendered at
-https://iamtatsuki05.github.io/lenslapse/docs/.
+https://lenslapse.iamtatsuki05.com/docs/.
 
 ## Deploy (zero cost)
 
