@@ -49,6 +49,11 @@ checkpoint folder with your OS's file dialog, and probe it live — no ONNX conv
 files. (In a checkout, `uv run lenslapse server` serves your own `web/dist` build instead;
 run `scripts/bundle_webapp.sh` after changing `web/` to refresh the packaged shell.)
 
+Models too large for your laptop can run on a GPU machine instead: start `lenslapse server` there
+(CUDA is picked up automatically; `--device-map` and `--dtype bfloat16` help with very large models)
+and forward port 8017 over SSH. See
+[On a remote GPU machine](docs/advanced-usage.md#on-a-remote-gpu-machine).
+
 ## Why
 
 - No public, hosted tool lets you interactively inspect a real LLM's internals *across training time* (Pythia ships 154 checkpoints, but existing views are loss curves and static galleries).
