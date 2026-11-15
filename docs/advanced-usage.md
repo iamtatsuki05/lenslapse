@@ -106,6 +106,28 @@ an fp16 forward already flips 5/56 late-checkpoint top-1s, so `--dtype float16/b
 (halving memory for heavy models) is an explicit opt-in, and results at different dtypes
 never replay for one another in the probe cache.
 
+### On a remote GPU machine
+
+To probe a model that only fits on a lab GPU server or a cluster node, run the server there and
+forward its port over SSH. The server stays bound to `127.0.0.1`, so the unauthenticated
+management API is never exposed on the network.
+
+```bash
+# on the GPU machine (inside an allocated job on a Slurm cluster)
+pip install lenslapse
+lenslapse server --dtype bfloat16 --device-map --extra my-big-model=<hf-model-id>:final
+
+# on your laptop: forward local port 8017 to the server's 8017
+ssh -N -L 8017:localhost:8017 <gpu-host>
+```
+
+Then open `http://localhost:8017/`, which serves the bundled app already connected to the
+server, or `https://lenslapse.iamtatsuki05.com/?probe=http://localhost:8017` to use the deployed
+app. If the server runs on a compute node that you reach through a login node, forward through
+it: `ssh -N -L 8017:<compute-node>:8017 <login-node>`. In that case the server must listen where
+the login node can reach it, so start it with `--host <compute-node-address>` and remember that
+anyone on that internal network can then reach the management API.
+
 ## Script it: the CLI mirrors the UI
 
 Every interactive feature also runs headless from the terminal (`probe --json` prints the
